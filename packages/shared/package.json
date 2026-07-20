@@ -1,0 +1,8 @@
+{
+  "name": "@dailytask/shared",
+  "version": "1.0.0",
+  "description": "Shared types and utilities for DailyTask apps",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {}
+}

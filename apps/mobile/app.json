@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "DailyTask",
+    "slug": "dailytask",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": { "backgroundColor": "#6366F1" },
+    "ios": { "bundleIdentifier": "com.dailytask.app", "supportsTablet": true },
+    "android": { "adaptiveIcon": { "backgroundColor": "#6366F1" }, "package": "com.dailytask.app" },
+    "plugins": [
+      [
+        "expo-notifications",
+        { "icon": "./assets/notification-icon.png", "color": "#6366F1" }
+      ],
+      "expo-sqlite"
+    ]
+  }
+}
