@@ -4,13 +4,13 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import * as Notifications from 'expo-notifications';
 import { StatusBar } from 'expo-status-bar';
 import { useColorScheme } from 'react-native';
 
 import RootNavigator from './src/navigation';
 import { useTimerStore } from './src/store/timerStore';
 import { getActiveTimer } from './src/api/client';
+import { loadNotificationsModule } from './src/lib/notifications';
 
 // ─── Query Client ─────────────────────────────────────────────────────────────
 
@@ -25,16 +25,6 @@ const queryClient = new QueryClient({
       retry: 1,
     },
   },
-});
-
-// ─── Notification Handler ─────────────────────────────────────────────────────
-
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-  }),
 });
 
 // ─── Navigation Theme ─────────────────────────────────────────────────────────
@@ -70,16 +60,50 @@ function AppInner() {
   const { startTimer } = useTimerStore();
 
   useEffect(() => {
-    // 1. Request notification permissions
-    (async () => {
-      const { status } = await Notifications.requestPermissionsAsync();
-      if (status !== 'granted') {
-        console.warn('[Notifications] Permission not granted.');
-      }
-    })();
+    let responseSub: { remove: () => void } | null = null;
+    let receivedSub: { remove: () => void } | null = null;
 
-    // 2. Restore active timer from backend on cold start
     (async () => {
+      try {
+        const Notifications = await loadNotificationsModule();
+
+        if (Notifications) {
+          Notifications.setNotificationHandler({
+            handleNotification: async () => ({
+              shouldShowAlert: true,
+              shouldShowBanner: true,
+              shouldShowList: true,
+              shouldPlaySound: true,
+              shouldSetBadge: true,
+            }),
+          });
+
+          const { status } = await Notifications.requestPermissionsAsync();
+          if (status !== 'granted') {
+            console.warn('[Notifications] Permission not granted.');
+          }
+
+          responseSub = Notifications.addNotificationResponseReceivedListener((response) => {
+            const taskId = response.notification.request.content.data?.taskId as
+              | string
+              | undefined;
+            if (taskId) {
+              // In a full implementation, use a navigation ref here to deep-link to the task
+              console.log('[Notifications] Tapped notification for taskId:', taskId);
+            }
+          });
+
+          receivedSub = Notifications.addNotificationReceivedListener((notification) => {
+            console.log(
+              '[Notifications] Received in foreground:',
+              notification.request.content.title
+            );
+          });
+        }
+      } catch {
+        // Notifications are unavailable in Expo Go, so continue without them.
+      }
+
       try {
         const activeTimer = await getActiveTimer();
         if (activeTimer?.is_active) {
@@ -95,23 +119,9 @@ function AppInner() {
       }
     })();
 
-    // 3. Handle notification tap → navigate to task
-    const responseSub = Notifications.addNotificationResponseReceivedListener((response) => {
-      const taskId = response.notification.request.content.data?.taskId as string | undefined;
-      if (taskId) {
-        // In a full implementation, use a navigation ref here to deep-link to the task
-        console.log('[Notifications] Tapped notification for taskId:', taskId);
-      }
-    });
-
-    // 4. Handle foreground notifications
-    const receivedSub = Notifications.addNotificationReceivedListener((notification) => {
-      console.log('[Notifications] Received in foreground:', notification.request.content.title);
-    });
-
     return () => {
-      responseSub.remove();
-      receivedSub.remove();
+      responseSub?.remove();
+      receivedSub?.remove();
     };
   }, []);
 

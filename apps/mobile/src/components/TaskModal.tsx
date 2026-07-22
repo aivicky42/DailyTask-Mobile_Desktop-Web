@@ -4,6 +4,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  Pressable,
   StyleSheet,
   ScrollView,
   Switch,
@@ -31,11 +32,14 @@ import ConflictDialog from './ConflictDialog';
 import RecurrencePrompt from './RecurrencePrompt';
 import {
   createTaskOccurrence,
+  createTaskTemplate,
   updateTaskOccurrence,
   checkConflict,
   getCategories,
+  getTaskOccurrences,
   scheduleTaskReminder,
   getSettings,
+  generateForRange,
 } from '../api/client';
 import {
   toDateString,
@@ -72,7 +76,7 @@ interface Props {
 }
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-const WEEKDAY_VALUES = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
+const WEEKDAY_VALUES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 const RECURRENCE_OPTIONS: { value: RecurrenceType; label: string; icon: string }[] = [
   { value: 'NONE', label: 'One-time', icon: '1️⃣' },
@@ -123,7 +127,7 @@ export default function TaskModal({ visible, onClose, task, defaultDate, queryKe
 
   // ── Data ────────────────────────────────────────────────────────────────────
 
-  const { data: categories = [] } = useQuery<Category[]>({
+  const { data: categories = [], isError: categoriesError, isLoading: categoriesLoading } = useQuery<Category[]>({
     queryKey: ['categories'],
     queryFn: getCategories,
   });
@@ -146,8 +150,8 @@ export default function TaskModal({ visible, onClose, task, defaultDate, queryKe
         date: new Date(task.date),
         startTimeHours: hours,
         startTimeMinutes: minutes,
-        durationHours: Math.floor(task.time_to_complete / 3600),
-        durationMinutes: Math.floor((task.time_to_complete % 3600) / 60),
+        durationHours: Math.floor(task.time_to_complete / 60),
+        durationMinutes: task.time_to_complete % 60,
         categoryId: task.category_id,
         reminderEnabled: task.reminder_enabled,
         recurrenceType: 'NONE',
@@ -174,43 +178,77 @@ export default function TaskModal({ visible, onClose, task, defaultDate, queryKe
   // ── Computed ────────────────────────────────────────────────────────────────
 
   const startTimeStr = toTimeString(form.startTimeHours, form.startTimeMinutes);
-  const durationSeconds = form.durationHours * 3600 + form.durationMinutes * 60;
+  const durationMinutes = form.durationHours * 60 + form.durationMinutes;
   const dateStr = toDateString(form.date);
 
   // ── Mutations ───────────────────────────────────────────────────────────────
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey });
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey });
+    queryClient.invalidateQueries({ queryKey: ['task-occurrences'] });
+    queryClient.invalidateQueries({ queryKey: ['dashboard-streaks'] });
+  };
 
   const doSave = useCallback(
     async (overrideConflict = false) => {
       if (isSaving) return;
       setIsSaving(true);
       try {
-        const payload = {
-          title: form.title.trim(),
-          description: form.description.trim() || undefined,
-          date: dateStr,
-          start_time: startTimeStr,
-          time_to_complete: durationSeconds,
-          category_id: form.categoryId,
-          reminder_enabled: form.reminderEnabled,
-          recurrence_type: form.recurrenceType,
-          recurrence_interval:
-            form.recurrenceType === 'RECURRING' ? form.recurrenceInterval : undefined,
-          custom_days:
-            form.recurrenceType === 'CUSTOM' ? form.customDays.join(',') : undefined,
-          due_date: form.dueDate ? toDateString(form.dueDate) : undefined,
-        };
+        const isRecurring = form.recurrenceType !== 'NONE';
+        const customDays =
+          form.recurrenceType === 'CUSTOM' && form.customDays.length > 0
+            ? form.customDays.join(',')
+            : undefined;
+        const dueDate = form.dueDate ? toDateString(form.dueDate) : undefined;
 
-        let saved: TaskOccurrence;
+        let saved: TaskOccurrence | null = null;
+
         if (task) {
-          saved = await updateTaskOccurrence(task.id, payload);
+          saved = await updateTaskOccurrence(task.id, {
+            title: form.title.trim(),
+            description: form.description.trim() || undefined,
+            date: dateStr,
+            start_time: startTimeStr,
+            time_to_complete: durationMinutes,
+            category_id: form.categoryId,
+            reminder_enabled: form.reminderEnabled,
+          });
+        } else if (isRecurring) {
+          const template = await createTaskTemplate({
+            category_id: form.categoryId,
+            title: form.title.trim(),
+            description: form.description.trim() || undefined,
+            start_date: dateStr,
+            due_date: dueDate,
+            start_time: startTimeStr,
+            time_to_complete: durationMinutes,
+            reminder_enabled: form.reminderEnabled,
+            recurrence_type: form.recurrenceType,
+            recurrence_interval:
+              form.recurrenceType === 'RECURRING' ? form.recurrenceInterval : undefined,
+            custom_days: customDays,
+          });
+          const rangeEnd = dueDate ?? dateStr;
+          try {
+            await generateForRange(dateStr, rangeEnd);
+          } catch {
+            /* non-critical */
+          }
+          const occurrences = await getTaskOccurrences({ date: dateStr });
+          saved = occurrences.find((o) => o.task_template_id === template.id) ?? null;
         } else {
-          saved = await createTaskOccurrence(payload);
+          saved = await createTaskOccurrence({
+            title: form.title.trim(),
+            description: form.description.trim() || undefined,
+            date: dateStr,
+            start_time: startTimeStr,
+            time_to_complete: durationMinutes,
+            category_id: form.categoryId,
+            reminder_enabled: form.reminderEnabled,
+          });
         }
 
-        // Schedule reminder if enabled
-        if (form.reminderEnabled && settings?.default_reminder) {
+        if (saved && form.reminderEnabled && settings?.default_reminder) {
           await scheduleTaskReminder(saved, settings.default_reminder);
         }
 
@@ -222,7 +260,7 @@ export default function TaskModal({ visible, onClose, task, defaultDate, queryKe
         setIsSaving(false);
       }
     },
-    [form, task, dateStr, startTimeStr, durationSeconds, settings, invalidate, onClose, isSaving]
+    [form, task, dateStr, startTimeStr, durationMinutes, settings, invalidate, onClose, isSaving]
   );
 
   const handleSave = useCallback(async () => {
@@ -234,7 +272,7 @@ export default function TaskModal({ visible, onClose, task, defaultDate, queryKe
       Alert.alert('Validation', 'Please select a category.');
       return;
     }
-    if (durationSeconds === 0) {
+    if (durationMinutes === 0) {
       Alert.alert('Validation', 'Duration must be greater than 0.');
       return;
     }
@@ -250,7 +288,7 @@ export default function TaskModal({ visible, onClose, task, defaultDate, queryKe
       const result = await checkConflict({
         date: dateStr,
         start_time: startTimeStr,
-        time_to_complete: durationSeconds,
+        time_to_complete: durationMinutes,
         exclude_id: task?.id,
       });
       if (result.has_conflict) {
@@ -263,7 +301,7 @@ export default function TaskModal({ visible, onClose, task, defaultDate, queryKe
     }
 
     await doSave();
-  }, [form, task, dateStr, startTimeStr, durationSeconds, doSave]);
+  }, [form, task, dateStr, startTimeStr, durationMinutes, doSave]);
 
   const handleRecurrenceScope = useCallback(
     async (scope: DeleteScope, _endDate?: string) => {
@@ -273,7 +311,7 @@ export default function TaskModal({ visible, onClose, task, defaultDate, queryKe
         const result = await checkConflict({
           date: dateStr,
           start_time: startTimeStr,
-          time_to_complete: durationSeconds,
+          time_to_complete: durationMinutes,
           exclude_id: task?.id,
         });
         if (result.has_conflict) {
@@ -284,7 +322,7 @@ export default function TaskModal({ visible, onClose, task, defaultDate, queryKe
       } catch {}
       await doSave();
     },
-    [dateStr, startTimeStr, durationSeconds, task, doSave]
+    [dateStr, startTimeStr, durationMinutes, task, doSave]
   );
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -309,366 +347,350 @@ export default function TaskModal({ visible, onClose, task, defaultDate, queryKe
         statusBarTranslucent
         onRequestClose={onClose}
       >
-        <KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        >
-          <TouchableWithoutFeedback onPress={onClose}>
-            <View style={styles.backdrop}>
-              <TouchableWithoutFeedback>
-                <View style={[styles.sheet, { backgroundColor: theme.surface }]}>
-                  {/* Handle */}
-                  <View style={[styles.handle, { backgroundColor: theme.border }]} />
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <Pressable style={styles.backdrop} onPress={onClose}>
+            <Pressable style={[styles.sheet, { backgroundColor: theme.surface }]} onPress={() => {}}>
+              <View style={[styles.handle, { backgroundColor: theme.border }]} />
 
-                  {/* Header */}
-                  <View style={styles.sheetHeader}>
-                    <Text style={[styles.sheetTitle, { color: theme.text }]}>
-                      {task ? 'Edit Task' : 'New Task'}
-                    </Text>
-                    <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-                      <Text style={[styles.closeBtnText, { color: theme.textSecondary }]}>✕</Text>
+              <View style={styles.sheetHeader}>
+                <Text style={[styles.sheetTitle, { color: theme.text }]}>
+                  {task ? 'Edit Task' : 'New Task'}
+                </Text>
+                <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
+                  <Text style={[styles.closeBtnText, { color: theme.textSecondary }]}>✕</Text>
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView
+                style={styles.scroll}
+                contentContainerStyle={styles.scrollContent}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+              >
+                <Field label="Title *">
+                  <TextInput
+                    style={[
+                      styles.input,
+                      { backgroundColor: theme.background, borderColor: theme.border, color: theme.text },
+                    ]}
+                    value={form.title}
+                    onChangeText={(v) => setForm((p) => ({ ...p, title: v }))}
+                    placeholder="What do you need to do?"
+                    placeholderTextColor={theme.textMuted}
+                    maxLength={120}
+                    returnKeyType="next"
+                  />
+                </Field>
+
+                <Field label="Description">
+                  <TextInput
+                    style={[
+                      styles.input,
+                      styles.multiline,
+                      { backgroundColor: theme.background, borderColor: theme.border, color: theme.text },
+                    ]}
+                    value={form.description}
+                    onChangeText={(v) => setForm((p) => ({ ...p, description: v }))}
+                    placeholder="Add details (optional)"
+                    placeholderTextColor={theme.textMuted}
+                    multiline
+                    numberOfLines={3}
+                    textAlignVertical="top"
+                    maxLength={500}
+                  />
+                </Field>
+
+                <View style={styles.row2}>
+                  <Field label="Date" style={{ flex: 1 }}>
+                    <TouchableOpacity
+                      style={[styles.pickerBtn, { backgroundColor: theme.background, borderColor: theme.border }]}
+                      onPress={() => setShowDatePicker(true)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.pickerBtnIcon}>📅</Text>
+                      <Text style={[styles.pickerBtnText, { color: theme.text }]}>
+                        {formatDate(dateStr)}
+                      </Text>
                     </TouchableOpacity>
+                  </Field>
+
+                  <Field label="Start Time" style={{ flex: 1 }}>
+                    <TouchableOpacity
+                      style={[styles.pickerBtn, { backgroundColor: theme.background, borderColor: theme.border }]}
+                      onPress={() => setShowTimePicker(true)}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={styles.pickerBtnIcon}>🕐</Text>
+                      <Text style={[styles.pickerBtnText, { color: theme.text }]}>
+                        {formatTimeDisplay(startTimeStr)}
+                      </Text>
+                    </TouchableOpacity>
+                  </Field>
+                </View>
+
+                {showDatePicker && (
+                  <DateTimePicker
+                    value={form.date}
+                    mode="date"
+                    onChange={(_, date) => {
+                      setShowDatePicker(false);
+                      if (date) setForm((p) => ({ ...p, date }));
+                    }}
+                  />
+                )}
+                {showTimePicker && (
+                  <DateTimePicker
+                    value={(() => {
+                      const d = new Date();
+                      d.setHours(form.startTimeHours, form.startTimeMinutes, 0, 0);
+                      return d;
+                    })()}
+                    mode="time"
+                    is24Hour={false}
+                    onChange={(_, date) => {
+                      setShowTimePicker(false);
+                      if (date) {
+                        setForm((p) => ({
+                          ...p,
+                          startTimeHours: date.getHours(),
+                          startTimeMinutes: date.getMinutes(),
+                        }));
+                      }
+                    }}
+                  />
+                )}
+
+                <Field label="Duration">
+                  <View style={styles.durationRow}>
+                    <DurationInput
+                      value={form.durationHours}
+                      onChange={(v) => setForm((p) => ({ ...p, durationHours: v }))}
+                      max={23}
+                      label="h"
+                      theme={theme}
+                    />
+                    <Text style={[styles.durationSep, { color: theme.textMuted }]}>:</Text>
+                    <DurationInput
+                      value={form.durationMinutes}
+                      onChange={(v) => setForm((p) => ({ ...p, durationMinutes: v }))}
+                      max={59}
+                      label="m"
+                      theme={theme}
+                      step={5}
+                    />
+                  </View>
+                </Field>
+
+                <Field label="Category">
+                  {categoriesLoading ? (
+                    <ActivityIndicator color={COLORS.primary} />
+                  ) : categories.length === 0 ? (
+                    <Text style={{ color: theme.textMuted, fontSize: 13 }}>
+                      {categoriesError
+                        ? 'Could not load categories. Check server URL or enable Sync & sign in.'
+                        : 'No categories available. Add one in Settings first.'}
+                    </Text>
+                  ) : (
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                      <View style={styles.categoryRow}>
+                        {categories.map((cat) => {
+                          const isSelected = form.categoryId === cat.id;
+                          const color = cat.color_hex || COLORS.primary;
+                          return (
+                            <TouchableOpacity
+                              key={cat.id}
+                              style={[
+                                styles.categoryChip,
+                                {
+                                  backgroundColor: isSelected ? color : `${color}15`,
+                                  borderColor: isSelected ? color : 'transparent',
+                                  borderWidth: 1.5,
+                                },
+                              ]}
+                              onPress={() => setForm((p) => ({ ...p, categoryId: cat.id }))}
+                              activeOpacity={0.8}
+                            >
+                              <Text style={styles.categoryChipIcon}>{cat.icon_path}</Text>
+                              <Text
+                                style={[
+                                  styles.categoryChipText,
+                                  { color: isSelected ? '#FFFFFF' : color },
+                                ]}
+                              >
+                                {cat.name}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    </ScrollView>
+                  )}
+                </Field>
+
+                <View style={[styles.toggleRow, { borderColor: theme.border }]}>
+                  <View style={styles.toggleInfo}>
+                    <Text style={styles.toggleIcon}>🔔</Text>
+                    <View>
+                      <Text style={[styles.toggleLabel, { color: theme.text }]}>Reminder</Text>
+                      <Text style={[styles.toggleSub, { color: theme.textMuted }]}>
+                        {settings?.default_reminder
+                          ? `${settings.default_reminder} min before`
+                          : 'Notify before task starts'}
+                      </Text>
+                    </View>
+                  </View>
+                  <Switch
+                    value={form.reminderEnabled}
+                    onValueChange={(v) => setForm((p) => ({ ...p, reminderEnabled: v }))}
+                    trackColor={{ false: theme.border, true: COLORS.primary + '60' }}
+                    thumbColor={form.reminderEnabled ? COLORS.primary : theme.textMuted}
+                  />
+                </View>
+
+                <Field label="Repeat">
+                  <View style={styles.recurrenceOptions}>
+                    {RECURRENCE_OPTIONS.map((opt) => {
+                      const isSelected = form.recurrenceType === opt.value;
+                      return (
+                        <TouchableOpacity
+                          key={opt.value}
+                          style={[
+                            styles.recurrenceChip,
+                            { borderColor: isSelected ? COLORS.primary : theme.border },
+                            isSelected && { backgroundColor: COLORS.primaryLight },
+                          ]}
+                          onPress={() => setForm((p) => ({ ...p, recurrenceType: opt.value }))}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={styles.recurrenceChipIcon}>{opt.icon}</Text>
+                          <Text
+                            style={[
+                              styles.recurrenceChipText,
+                              { color: isSelected ? COLORS.primary : theme.textSecondary },
+                            ]}
+                          >
+                            {opt.label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
                   </View>
 
-                  <ScrollView
-                    style={styles.scroll}
-                    contentContainerStyle={styles.scrollContent}
-                    showsVerticalScrollIndicator={false}
-                    keyboardShouldPersistTaps="handled"
-                  >
-                    {/* ── Title ─────────────────────────────────────────── */}
-                    <Field label="Title *">
-                      <TextInput
-                        style={[
-                          styles.input,
-                          { backgroundColor: theme.background, borderColor: theme.border, color: theme.text },
-                        ]}
-                        value={form.title}
-                        onChangeText={(v) => setForm((p) => ({ ...p, title: v }))}
-                        placeholder="What do you need to do?"
-                        placeholderTextColor={theme.textMuted}
-                        maxLength={120}
-                        returnKeyType="next"
-                      />
-                    </Field>
-
-                    {/* ── Description ───────────────────────────────────── */}
-                    <Field label="Description">
-                      <TextInput
-                        style={[
-                          styles.input,
-                          styles.multiline,
-                          { backgroundColor: theme.background, borderColor: theme.border, color: theme.text },
-                        ]}
-                        value={form.description}
-                        onChangeText={(v) => setForm((p) => ({ ...p, description: v }))}
-                        placeholder="Add details (optional)"
-                        placeholderTextColor={theme.textMuted}
-                        multiline
-                        numberOfLines={3}
-                        textAlignVertical="top"
-                        maxLength={500}
-                      />
-                    </Field>
-
-                    {/* ── Date & Time row ───────────────────────────────── */}
-                    <View style={styles.row2}>
-                      <Field label="Date" style={{ flex: 1 }}>
-                        <TouchableOpacity
-                          style={[styles.pickerBtn, { backgroundColor: theme.background, borderColor: theme.border }]}
-                          onPress={() => setShowDatePicker(true)}
-                          activeOpacity={0.8}
-                        >
-                          <Text style={styles.pickerBtnIcon}>📅</Text>
-                          <Text style={[styles.pickerBtnText, { color: theme.text }]}>
-                            {formatDate(dateStr)}
-                          </Text>
-                        </TouchableOpacity>
-                      </Field>
-
-                      <Field label="Start Time" style={{ flex: 1 }}>
-                        <TouchableOpacity
-                          style={[styles.pickerBtn, { backgroundColor: theme.background, borderColor: theme.border }]}
-                          onPress={() => setShowTimePicker(true)}
-                          activeOpacity={0.8}
-                        >
-                          <Text style={styles.pickerBtnIcon}>🕐</Text>
-                          <Text style={[styles.pickerBtnText, { color: theme.text }]}>
-                            {formatTimeDisplay(startTimeStr)}
-                          </Text>
-                        </TouchableOpacity>
-                      </Field>
-                    </View>
-
-                    {/* DateTimePicker modals */}
-                    {showDatePicker && (
-                      <DateTimePicker
-                        value={form.date}
-                        mode="date"
-                        onChange={(_, date) => {
-                          setShowDatePicker(false);
-                          if (date) setForm((p) => ({ ...p, date }));
-                        }}
-                      />
-                    )}
-                    {showTimePicker && (
-                      <DateTimePicker
-                        value={(() => {
-                          const d = new Date();
-                          d.setHours(form.startTimeHours, form.startTimeMinutes, 0, 0);
-                          return d;
-                        })()}
-                        mode="time"
-                        is24Hour={false}
-                        onChange={(_, date) => {
-                          setShowTimePicker(false);
-                          if (date) {
-                            setForm((p) => ({
-                              ...p,
-                              startTimeHours: date.getHours(),
-                              startTimeMinutes: date.getMinutes(),
-                            }));
-                          }
-                        }}
-                      />
-                    )}
-
-                    {/* ── Duration ─────────────────────────────────────── */}
-                    <Field label="Duration">
-                      <View style={styles.durationRow}>
-                        <DurationInput
-                          value={form.durationHours}
-                          onChange={(v) => setForm((p) => ({ ...p, durationHours: v }))}
-                          max={23}
-                          label="h"
-                          theme={theme}
-                        />
-                        <Text style={[styles.durationSep, { color: theme.textMuted }]}>:</Text>
-                        <DurationInput
-                          value={form.durationMinutes}
-                          onChange={(v) => setForm((p) => ({ ...p, durationMinutes: v }))}
-                          max={59}
-                          label="m"
-                          theme={theme}
-                          step={5}
-                        />
-                      </View>
-                    </Field>
-
-                    {/* ── Category ─────────────────────────────────────── */}
-                    <Field label="Category">
+                  {form.recurrenceType === 'RECURRING' && (
+                    <View style={styles.intervalPicker}>
+                      <Text style={[styles.intervalLabel, { color: theme.textSecondary }]}>Every</Text>
                       <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                        <View style={styles.categoryRow}>
-                          {categories.map((cat) => {
-                            const isSelected = form.categoryId === cat.id;
-                            const color = cat.color_hex || COLORS.primary;
+                        <View style={{ flexDirection: 'row', gap: 8 }}>
+                          {INTERVAL_OPTIONS.map((opt) => {
+                            const isSelected = form.recurrenceInterval === opt.value;
                             return (
                               <TouchableOpacity
-                                key={cat.id}
+                                key={opt.value}
                                 style={[
-                                  styles.categoryChip,
-                                  {
-                                    backgroundColor: isSelected ? color : `${color}15`,
-                                    borderColor: isSelected ? color : 'transparent',
-                                    borderWidth: 1.5,
-                                  },
+                                  styles.intervalChip,
+                                  { borderColor: isSelected ? COLORS.primary : theme.border },
+                                  isSelected && { backgroundColor: COLORS.primary },
                                 ]}
-                                onPress={() => setForm((p) => ({ ...p, categoryId: cat.id }))}
+                                onPress={() => setForm((p) => ({ ...p, recurrenceInterval: opt.value }))}
                                 activeOpacity={0.8}
                               >
-                                <Text style={styles.categoryChipIcon}>{cat.icon_path}</Text>
                                 <Text
                                   style={[
-                                    styles.categoryChipText,
-                                    { color: isSelected ? '#FFFFFF' : color },
+                                    styles.intervalChipText,
+                                    { color: isSelected ? '#FFF' : theme.text },
                                   ]}
                                 >
-                                  {cat.name}
+                                  {opt.label}
                                 </Text>
                               </TouchableOpacity>
                             );
                           })}
                         </View>
                       </ScrollView>
-                    </Field>
-
-                    {/* ── Reminder toggle ───────────────────────────────── */}
-                    <View style={[styles.toggleRow, { borderColor: theme.border }]}>
-                      <View style={styles.toggleInfo}>
-                        <Text style={styles.toggleIcon}>🔔</Text>
-                        <View>
-                          <Text style={[styles.toggleLabel, { color: theme.text }]}>Reminder</Text>
-                          <Text style={[styles.toggleSub, { color: theme.textMuted }]}>
-                            {settings?.default_reminder
-                              ? `${settings.default_reminder} min before`
-                              : 'Notify before task starts'}
-                          </Text>
-                        </View>
-                      </View>
-                      <Switch
-                        value={form.reminderEnabled}
-                        onValueChange={(v) => setForm((p) => ({ ...p, reminderEnabled: v }))}
-                        trackColor={{ false: theme.border, true: COLORS.primary + '60' }}
-                        thumbColor={form.reminderEnabled ? COLORS.primary : theme.textMuted}
-                      />
                     </View>
+                  )}
 
-                    {/* ── Recurrence ───────────────────────────────────── */}
-                    <Field label="Repeat">
-                      <View style={styles.recurrenceOptions}>
-                        {RECURRENCE_OPTIONS.map((opt) => {
-                          const isSelected = form.recurrenceType === opt.value;
+                  {form.recurrenceType === 'CUSTOM' && (
+                    <View style={styles.customSection}>
+                      <Text style={[styles.intervalLabel, { color: theme.textSecondary }]}>Repeat on</Text>
+                      <View style={styles.weekdayRow}>
+                        {WEEKDAYS.map((day, i) => {
+                          const val = WEEKDAY_VALUES[i]!;
+                          const isSelected = form.customDays.includes(val);
                           return (
                             <TouchableOpacity
-                              key={opt.value}
+                              key={day}
                               style={[
-                                styles.recurrenceChip,
+                                styles.weekdayChip,
                                 { borderColor: isSelected ? COLORS.primary : theme.border },
-                                isSelected && { backgroundColor: COLORS.primaryLight },
+                                isSelected && { backgroundColor: COLORS.primary },
                               ]}
-                              onPress={() => setForm((p) => ({ ...p, recurrenceType: opt.value }))}
+                              onPress={() => toggleCustomDay(val)}
                               activeOpacity={0.8}
                             >
-                              <Text style={styles.recurrenceChipIcon}>{opt.icon}</Text>
                               <Text
                                 style={[
-                                  styles.recurrenceChipText,
-                                  { color: isSelected ? COLORS.primary : theme.textSecondary },
+                                  styles.weekdayText,
+                                  { color: isSelected ? '#FFF' : theme.text },
                                 ]}
                               >
-                                {opt.label}
+                                {day}
                               </Text>
                             </TouchableOpacity>
                           );
                         })}
                       </View>
 
-                      {/* Recurring: interval picker */}
-                      {form.recurrenceType === 'RECURRING' && (
-                        <View style={styles.intervalPicker}>
-                          <Text style={[styles.intervalLabel, { color: theme.textSecondary }]}>
-                            Every
-                          </Text>
-                          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                            <View style={{ flexDirection: 'row', gap: 8 }}>
-                              {INTERVAL_OPTIONS.map((opt) => {
-                                const isSelected = form.recurrenceInterval === opt.value;
-                                return (
-                                  <TouchableOpacity
-                                    key={opt.value}
-                                    style={[
-                                      styles.intervalChip,
-                                      { borderColor: isSelected ? COLORS.primary : theme.border },
-                                      isSelected && { backgroundColor: COLORS.primary },
-                                    ]}
-                                    onPress={() =>
-                                      setForm((p) => ({ ...p, recurrenceInterval: opt.value }))
-                                    }
-                                    activeOpacity={0.8}
-                                  >
-                                    <Text
-                                      style={[
-                                        styles.intervalChipText,
-                                        { color: isSelected ? '#FFF' : theme.text },
-                                      ]}
-                                    >
-                                      {opt.label}
-                                    </Text>
-                                  </TouchableOpacity>
-                                );
-                              })}
-                            </View>
-                          </ScrollView>
-                        </View>
-                      )}
-
-                      {/* Custom: weekday checkboxes + due date */}
-                      {form.recurrenceType === 'CUSTOM' && (
-                        <View style={styles.customSection}>
-                          <Text style={[styles.intervalLabel, { color: theme.textSecondary }]}>
-                            Repeat on
-                          </Text>
-                          <View style={styles.weekdayRow}>
-                            {WEEKDAYS.map((day, i) => {
-                              const val = WEEKDAY_VALUES[i]!;
-                              const isSelected = form.customDays.includes(val);
-                              return (
-                                <TouchableOpacity
-                                  key={day}
-                                  style={[
-                                    styles.weekdayChip,
-                                    { borderColor: isSelected ? COLORS.primary : theme.border },
-                                    isSelected && { backgroundColor: COLORS.primary },
-                                  ]}
-                                  onPress={() => toggleCustomDay(val)}
-                                  activeOpacity={0.8}
-                                >
-                                  <Text
-                                    style={[
-                                      styles.weekdayText,
-                                      { color: isSelected ? '#FFF' : theme.text },
-                                    ]}
-                                  >
-                                    {day}
-                                  </Text>
-                                </TouchableOpacity>
-                              );
-                            })}
-                          </View>
-
-                          <TouchableOpacity
-                            style={[
-                              styles.pickerBtn,
-                              { backgroundColor: theme.background, borderColor: theme.border },
-                            ]}
-                            onPress={() => setShowDueDatePicker(true)}
-                            activeOpacity={0.8}
-                          >
-                            <Text style={styles.pickerBtnIcon}>📆</Text>
-                            <Text style={[styles.pickerBtnText, { color: theme.text }]}>
-                              {form.dueDate
-                                ? `Until ${formatDate(toDateString(form.dueDate))}`
-                                : 'Due date (optional)'}
-                            </Text>
-                          </TouchableOpacity>
-                          {showDueDatePicker && (
-                            <DateTimePicker
-                              value={form.dueDate ?? new Date()}
-                              mode="date"
-                              minimumDate={form.date}
-                              onChange={(_, date) => {
-                                setShowDueDatePicker(false);
-                                if (date) setForm((p) => ({ ...p, dueDate: date }));
-                              }}
-                            />
-                          )}
-                        </View>
-                      )}
-                    </Field>
-
-                    {/* Save button */}
-                    <TouchableOpacity
-                      style={[
-                        styles.saveBtn,
-                        { backgroundColor: COLORS.primary, opacity: isSaving ? 0.7 : 1 },
-                      ]}
-                      onPress={handleSave}
-                      disabled={isSaving}
-                      activeOpacity={0.8}
-                    >
-                      {isSaving ? (
-                        <ActivityIndicator color="#FFF" />
-                      ) : (
-                        <Text style={styles.saveBtnText}>
-                          {task ? 'Save Changes' : 'Create Task'}
+                      <TouchableOpacity
+                        style={[
+                          styles.pickerBtn,
+                          { backgroundColor: theme.background, borderColor: theme.border },
+                        ]}
+                        onPress={() => setShowDueDatePicker(true)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={styles.pickerBtnIcon}>📆</Text>
+                        <Text style={[styles.pickerBtnText, { color: theme.text }]}>
+                          {form.dueDate
+                            ? `Until ${formatDate(toDateString(form.dueDate))}`
+                            : 'Due date (optional)'}
                         </Text>
+                      </TouchableOpacity>
+                      {showDueDatePicker && (
+                        <DateTimePicker
+                          value={form.dueDate ?? new Date()}
+                          mode="date"
+                          minimumDate={form.date}
+                          onChange={(_, date) => {
+                            setShowDueDatePicker(false);
+                            if (date) setForm((p) => ({ ...p, dueDate: date }));
+                          }}
+                        />
                       )}
-                    </TouchableOpacity>
-                  </ScrollView>
-                </View>
-              </TouchableWithoutFeedback>
-            </View>
-          </TouchableWithoutFeedback>
+                    </View>
+                  )}
+                </Field>
+
+                <TouchableOpacity
+                  style={[
+                    styles.saveBtn,
+                    { backgroundColor: COLORS.primary, opacity: isSaving ? 0.7 : 1 },
+                  ]}
+                  onPress={handleSave}
+                  disabled={isSaving}
+                  activeOpacity={0.8}
+                >
+                  {isSaving ? (
+                    <ActivityIndicator color="#FFF" />
+                  ) : (
+                    <Text style={styles.saveBtnText}>
+                      {task ? 'Save Changes' : 'Create Task'}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </ScrollView>
+            </Pressable>
+          </Pressable>
         </KeyboardAvoidingView>
       </Modal>
 
@@ -764,9 +786,11 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   sheet: {
+    flex: 1,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     maxHeight: '92%',
+    overflow: 'hidden',
   },
   handle: {
     width: 40,
@@ -802,6 +826,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingBottom: 48,
     gap: 16,
+    flexGrow: 1,
   },
   field: { gap: 8 },
   fieldLabel: {

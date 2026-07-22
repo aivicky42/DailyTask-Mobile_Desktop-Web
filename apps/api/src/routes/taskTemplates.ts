@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { getDatabase, toBool } from '../db/database';
 import { AppError } from '../middleware/errorHandler';
 import { TaskTemplate, RecurrenceType, RecurrenceInterval } from '../types';
-import { generateOccurrencesForDate } from '../services/schedulerService';
+import { generateOccurrencesForDate, generateOccurrencesForRange } from '../services/schedulerService';
 import { todayString } from '../db/database';
 
 const router = Router();
@@ -79,6 +79,24 @@ router.post('/generate-today', (_req: Request, res: Response, next: NextFunction
   }
 });
 
+// ─── POST /api/v1/task-templates/generate-range ───────────────────────────────
+router.post('/generate-range', (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { start_date, end_date } = req.body as { start_date?: string; end_date?: string };
+    if (!start_date || !end_date) {
+      throw new AppError(400, 'Validation Error', 'start_date and end_date are required (YYYY-MM-DD).');
+    }
+    generateOccurrencesForRange(start_date, end_date);
+    res.json({
+      message: `Successfully generated task occurrences for ${start_date}..${end_date}.`,
+      start_date,
+      end_date,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ─── POST /api/v1/task-templates ─────────────────────────────────────────────
 router.post('/', (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -134,12 +152,16 @@ router.post('/', (req: Request, res: Response, next: NextFunction) => {
 
     const row = db.prepare('SELECT * FROM task_templates WHERE id = ?').get(id) as Record<string, unknown>;
 
-    // Immediately generate today's occurrence if start_date is today or earlier,
-    // so the task appears in the UI right away without waiting for midnight.
+    // Materialize occurrences so the task shows on calendar immediately.
     const today = todayString();
-    if ((start_date as string) <= today) {
+    const rangeStart = start_date as string;
+    let rangeEnd = (due_date as string | null | undefined) ?? rangeStart;
+    if (!(due_date as string | null | undefined) && rangeStart <= today) {
+      rangeEnd = today;
+    }
+    if (rangeStart <= rangeEnd) {
       try {
-        generateOccurrencesForDate(today);
+        generateOccurrencesForRange(rangeStart, rangeEnd);
       } catch (genErr) {
         console.error('[Template] Failed to generate occurrences after create:', genErr);
       }

@@ -2,13 +2,15 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Sun, Moon, Monitor, Bell, Calendar, Globe, Clock,
-  Save, Volume2, Tag,
+  Save, Volume2, Tag, RefreshCw,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { getSettings, updateSettings } from '../api/client';
+import { getSettings, updateSettings, syncWithServer } from '../api/client';
 import { useTheme } from '../hooks/useTheme';
 import CategoryManager from '../components/CategoryManager';
 import type { Settings, ThemeMode } from '../types';
+import { getApiBaseUrl, getLastSyncAt, setApiBaseUrl, setSyncEnabled } from '../lib/appConfig';
+import { getSyncAccountState, signInForSync, signOutSync, signUpForSync } from '../lib/syncAccount';
 
 // ── Section wrapper ───────────────────────────────────────────────────────────
 function Section({ title, icon, children }: {
@@ -80,11 +82,28 @@ export default function SettingsPage() {
 
   const [local, setLocal] = useState<Partial<Settings>>({});
   const [saved, setSaved] = useState(false);
+  const [apiBaseUrl, setApiBaseUrlState] = useState('');
+  const [lastSyncedAt, setLastSyncedAtState] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [showSyncForm, setShowSyncForm] = useState(false);
+  const [syncEmail, setSyncEmail] = useState('');
+  const [syncPassword, setSyncPassword] = useState('');
+  const [syncAccountEmail, setSyncAccountEmail] = useState<string | null>(null);
+  const [isAuthBusy, setIsAuthBusy] = useState(false);
 
   // Sync local state when settings load
   useEffect(() => {
     if (settings) setLocal(settings);
   }, [settings]);
+
+  useEffect(() => {
+    (async () => {
+      setApiBaseUrlState(await getApiBaseUrl());
+      setLastSyncedAtState(await getLastSyncAt());
+      const syncState = await getSyncAccountState();
+      setSyncAccountEmail(syncState.email);
+    })();
+  }, []);
 
   const mutation = useMutation({
     mutationFn: () => updateSettings(local),
@@ -97,6 +116,70 @@ export default function SettingsPage() {
 
   const update = <K extends keyof Settings>(key: K, value: Settings[K]) => {
     setLocal((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleSaveServerUrl = async () => {
+    await setApiBaseUrl(apiBaseUrl);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2500);
+  };
+
+  const handleSyncNow = async () => {
+    setIsSyncing(true);
+    try {
+      const result = await syncWithServer();
+      setLastSyncedAtState(result.synced_at);
+      await qc.invalidateQueries();
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleCreateAccount = async () => {
+    setIsAuthBusy(true);
+    try {
+      await signUpForSync(syncEmail.trim(), syncPassword);
+      await setSyncEnabled(true);
+      const syncState = await getSyncAccountState();
+      setSyncAccountEmail(syncState.email ?? syncEmail.trim());
+      setShowSyncForm(false);
+      setSyncPassword('');
+      await qc.invalidateQueries();
+    } catch (error: any) {
+      alert(error?.message ?? 'Could not create account.');
+    } finally {
+      setIsAuthBusy(false);
+    }
+  };
+
+  const handleSignIn = async () => {
+    setIsAuthBusy(true);
+    try {
+      await signInForSync(syncEmail.trim(), syncPassword);
+      await setSyncEnabled(true);
+      const syncState = await getSyncAccountState();
+      setSyncAccountEmail(syncState.email ?? syncEmail.trim());
+      setShowSyncForm(false);
+      setSyncPassword('');
+      await qc.invalidateQueries();
+    } catch (error: any) {
+      alert(error?.message ?? 'Could not sign in.');
+    } finally {
+      setIsAuthBusy(false);
+    }
+  };
+
+  const handleDisconnectSync = async () => {
+    setIsAuthBusy(true);
+    try {
+      await signOutSync();
+      await setSyncEnabled(false);
+      setSyncAccountEmail(null);
+      setSyncEmail('');
+      setSyncPassword('');
+    } finally {
+      setIsAuthBusy(false);
+    }
   };
 
   const selectCls =
@@ -270,6 +353,99 @@ export default function SettingsPage() {
               <option key={l.value} value={l.value}>{l.label}</option>
             ))}
           </select>
+        </Row>
+      </Section>
+
+      {/* ── Sync & Server ─────────────────────────────────────────────── */}
+      <Section title="Sync & Server" icon={<RefreshCw size={16} />}>
+        <Row label="Sync Account" description="Create or use the same Supabase account on any device">
+          {syncAccountEmail ? (
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-600 dark:text-gray-300">{syncAccountEmail}</span>
+              <button
+                onClick={handleDisconnectSync}
+                disabled={isAuthBusy}
+                className="px-4 py-2 rounded-xl text-sm font-medium bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-60 transition-colors"
+              >
+                Disconnect
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowSyncForm((prev) => !prev)}
+              className="px-4 py-2 rounded-xl text-sm font-medium bg-primary text-white hover:bg-primary-600 transition-colors"
+            >
+              Enable Sync
+            </button>
+          )}
+        </Row>
+
+        {showSyncForm && !syncAccountEmail && (
+          <div className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 p-4 space-y-3">
+            <p className="text-sm text-gray-600 dark:text-gray-300">
+              Sign up or sign in with the same email on another device to keep both in sync.
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <input
+                value={syncEmail}
+                onChange={(e) => setSyncEmail(e.target.value)}
+                type="email"
+                placeholder="Email address"
+                className="w-full px-3 py-2 text-sm rounded-xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
+              />
+              <input
+                value={syncPassword}
+                onChange={(e) => setSyncPassword(e.target.value)}
+                type="password"
+                placeholder="Password"
+                className="w-full px-3 py-2 text-sm rounded-xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
+              />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={handleCreateAccount}
+                disabled={isAuthBusy}
+                className="px-4 py-2 rounded-xl text-sm font-medium bg-primary text-white hover:bg-primary-600 disabled:opacity-60 transition-colors"
+              >
+                {isAuthBusy ? 'Working…' : 'Create Supabase Account'}
+              </button>
+              <button
+                onClick={handleSignIn}
+                disabled={isAuthBusy}
+                className="px-4 py-2 rounded-xl text-sm font-medium bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-60 transition-colors"
+              >
+                {isAuthBusy ? 'Working…' : 'Sign In'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        <Row label="Backend URL" description="Point this browser to your API server">
+          <div className="flex items-center gap-2">
+            <input
+              value={apiBaseUrl}
+              onChange={(e) => setApiBaseUrlState(e.target.value)}
+              placeholder="/api/v1 or http://localhost:3000/api/v1"
+              className="w-80 px-3 py-2 text-sm rounded-xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
+            />
+            <button
+              onClick={handleSaveServerUrl}
+              className="px-4 py-2 rounded-xl text-sm font-medium bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+            >
+              Save URL
+            </button>
+          </div>
+        </Row>
+
+        <Row label="Manual Sync" description={`Last synced: ${lastSyncedAt ? new Date(lastSyncedAt).toLocaleString() : 'Never'}`}>
+          <button
+            onClick={handleSyncNow}
+            disabled={isSyncing}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium bg-primary text-white hover:bg-primary-600 disabled:opacity-60 transition-colors"
+          >
+            <RefreshCw size={15} className={isSyncing ? 'animate-spin' : ''} />
+            {isSyncing ? 'Syncing…' : 'Sync Now'}
+          </button>
         </Row>
       </Section>
 

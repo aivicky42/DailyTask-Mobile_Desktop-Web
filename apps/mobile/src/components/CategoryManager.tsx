@@ -56,20 +56,20 @@ export default function CategoryManager({ categories }: Props) {
   const createMutation = useMutation({
     mutationFn: createCategory,
     onSuccess: () => { invalidate(); closeModal(); },
-    onError: () => Alert.alert('Error', 'Failed to create category.'),
+    onError: (error: Error) => Alert.alert('Error', error?.message ?? 'Failed to create category.'),
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Partial<CategoryForm> }) =>
       updateCategory(id, data),
     onSuccess: () => { invalidate(); closeModal(); },
-    onError: () => Alert.alert('Error', 'Failed to update category.'),
+    onError: (error: Error) => Alert.alert('Error', error?.message ?? 'Failed to update category.'),
   });
 
   const deleteMutation = useMutation({
     mutationFn: deleteCategory,
     onSuccess: invalidate,
-    onError: () => Alert.alert('Error', 'Failed to delete category.'),
+    onError: (error: Error) => Alert.alert('Error', error?.message ?? 'Failed to delete category.'),
   });
 
   // ── Handlers ───────────────────────────────────────────────────────────────

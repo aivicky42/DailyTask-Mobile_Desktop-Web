@@ -46,10 +46,11 @@ function insertOccurrenceIfNotExists(
   template: TemplateRow,
   date: string,
 ): void {
+  // Soft-deleted rows act as tombstones so SINGLE deletes are not regenerated.
   const exists = db
     .prepare(`
       SELECT id FROM task_occurrences
-      WHERE task_template_id = ? AND date = ? AND deleted_at IS NULL
+      WHERE task_template_id = ? AND date = ?
     `)
     .get(template.id, date);
 
@@ -148,6 +149,24 @@ export function generateOccurrencesForDate(targetDate: string): void {
       }
     }
 
+    // ── 3b. YEARLY ──────────────────────────────────────────────────────────
+    const yearly = db.prepare(`
+      SELECT * FROM task_templates
+      WHERE recurrence_type = 'RECURRING'
+        AND recurrence_interval = 'YEARLY'
+        AND start_date <= ?
+        AND (due_date IS NULL OR due_date >= ?)
+        AND deleted_at IS NULL
+    `).all(targetDate, targetDate) as (TemplateRow & { start_date: string })[];
+
+    for (const t of yearly) {
+      const start = new Date(`${t.start_date}T00:00:00`);
+      const current = new Date(`${targetDate}T00:00:00`);
+      if (start.getMonth() === current.getMonth() && start.getDate() === current.getDate()) {
+        insertOccurrenceIfNotExists(db, t, targetDate);
+      }
+    }
+
     // ── 4. CUSTOM with due_date – carry forward ──────────────────────────────
     const customDue = db.prepare(`
       SELECT * FROM task_templates
@@ -185,8 +204,8 @@ export function generateOccurrencesForDate(targetDate: string): void {
     for (const t of customWeekday) {
       const days = t.custom_days
         .split(',')
-        .map((d: string) => d.trim());
-      if (days.includes(abbr)) {
+        .map((d: string) => d.trim().toLowerCase());
+      if (days.includes(abbr.toLowerCase())) {
         insertOccurrenceIfNotExists(db, t, targetDate);
       }
     }
@@ -195,6 +214,25 @@ export function generateOccurrencesForDate(targetDate: string): void {
   generate();
 
   console.log(`[Scheduler] Generated occurrences for ${targetDate}`);
+}
+
+/**
+ * Generate occurrences for every day in [startDate, endDate] inclusive.
+ */
+export function generateOccurrencesForRange(startDate: string, endDate: string): void {
+  const cursor = new Date(`${startDate}T00:00:00`);
+  const end = new Date(`${endDate}T00:00:00`);
+  if (Number.isNaN(cursor.getTime()) || Number.isNaN(end.getTime()) || cursor > end) {
+    throw new Error('Invalid date range for occurrence generation.');
+  }
+
+  while (cursor <= end) {
+    const yyyy = cursor.getFullYear();
+    const mm = String(cursor.getMonth() + 1).padStart(2, '0');
+    const dd = String(cursor.getDate()).padStart(2, '0');
+    generateOccurrencesForDate(`${yyyy}-${mm}-${dd}`);
+    cursor.setDate(cursor.getDate() + 1);
+  }
 }
 
 // ─── Cron registration ────────────────────────────────────────────────────────

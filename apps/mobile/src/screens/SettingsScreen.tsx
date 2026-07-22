@@ -13,11 +13,13 @@ import {
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { getSettings, updateSettings, getCategories } from '../api/client';
+import { getSettings, updateSettings, getCategories, syncWithServer } from '../api/client';
 import { Settings, ThemeMode } from '../types';
 import { COLORS } from '../constants/colors';
 import { useAppTheme } from '../hooks/useAppTheme';
 import CategoryManager from '../components/CategoryManager';
+import { getApiBaseUrl, getLastSyncAt, setApiBaseUrl, setSyncEnabled } from '../lib/appConfig';
+import { getSyncAccountState, signInForSync, signOutSync, signUpForSync } from '../lib/syncAccount';
 
 type WeekStart = 'SUN' | 'MON';
 
@@ -39,6 +41,14 @@ export default function SettingsScreen() {
 
   const [localSettings, setLocalSettings] = useState<Partial<Settings>>({});
   const [isDirty, setIsDirty] = useState(false);
+  const [apiBaseUrl, setApiBaseUrlState] = useState('');
+  const [lastSyncedAt, setLastSyncedAtState] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncAccountEmail, setSyncAccountEmail] = useState<string | null>(null);
+  const [showSyncForm, setShowSyncForm] = useState(false);
+  const [syncEmail, setSyncEmail] = useState('');
+  const [syncPassword, setSyncPassword] = useState('');
+  const [isAuthBusy, setIsAuthBusy] = useState(false);
 
   // ── Queries ─────────────────────────────────────────────────────────────────
 
@@ -67,6 +77,15 @@ export default function SettingsScreen() {
     }
   }, [settings]);
 
+  useEffect(() => {
+    (async () => {
+      setApiBaseUrlState(await getApiBaseUrl());
+      setLastSyncedAtState(await getLastSyncAt());
+      const syncState = await getSyncAccountState();
+      setSyncAccountEmail(syncState.email);
+    })();
+  }, []);
+
   // ── Mutations ───────────────────────────────────────────────────────────────
 
   const updateMutation = useMutation({
@@ -89,6 +108,72 @@ export default function SettingsScreen() {
   const handleSave = useCallback(() => {
     updateMutation.mutate(localSettings);
   }, [localSettings, updateMutation]);
+
+  const handleSaveServerUrl = useCallback(async () => {
+    await setApiBaseUrl(apiBaseUrl);
+    Alert.alert('Saved', 'Server URL updated for this device.');
+  }, [apiBaseUrl]);
+
+  const handleSyncNow = useCallback(async () => {
+    setIsSyncing(true);
+    try {
+      const result = await syncWithServer();
+      setLastSyncedAtState(result.synced_at);
+      await queryClient.invalidateQueries();
+      Alert.alert('Synced', 'Data refreshed from the server.');
+    } catch (error: any) {
+      Alert.alert('Sync failed', error?.message ?? 'Could not sync with the server.');
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [queryClient]);
+
+  const handleCreateAccount = useCallback(async () => {
+    setIsAuthBusy(true);
+    try {
+      await signUpForSync(syncEmail.trim(), syncPassword);
+      await setSyncEnabled(true);
+      const syncState = await getSyncAccountState();
+      setSyncAccountEmail(syncState.email ?? syncEmail.trim());
+      setShowSyncForm(false);
+      setSyncPassword('');
+      Alert.alert('Sync enabled', 'Your account is ready on this device.');
+    } catch (error: any) {
+      Alert.alert('Sign up failed', error?.message ?? 'Could not create account.');
+    } finally {
+      setIsAuthBusy(false);
+    }
+  }, [syncEmail, syncPassword]);
+
+  const handleSignIn = useCallback(async () => {
+    setIsAuthBusy(true);
+    try {
+      await signInForSync(syncEmail.trim(), syncPassword);
+      await setSyncEnabled(true);
+      const syncState = await getSyncAccountState();
+      setSyncAccountEmail(syncState.email ?? syncEmail.trim());
+      setShowSyncForm(false);
+      setSyncPassword('');
+      Alert.alert('Signed in', 'This device is connected to your Supabase account.');
+    } catch (error: any) {
+      Alert.alert('Sign in failed', error?.message ?? 'Could not sign in.');
+    } finally {
+      setIsAuthBusy(false);
+    }
+  }, [syncEmail, syncPassword]);
+
+  const handleDisconnectSync = useCallback(async () => {
+    setIsAuthBusy(true);
+    try {
+      await signOutSync();
+      await setSyncEnabled(false);
+      setSyncAccountEmail(null);
+      setSyncEmail('');
+      setSyncPassword('');
+    } finally {
+      setIsAuthBusy(false);
+    }
+  }, []);
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
@@ -286,6 +371,146 @@ export default function SettingsScreen() {
           </View>
         </Section>
 
+        {/* ── Sync & Server ──────────────────────────────────────────── */}
+        <Section title="Sync & Server" icon="☁️">
+          <View style={[styles.settingCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+            <View style={styles.settingCardHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.settingLabel, { color: theme.text }]}>Backend URL</Text>
+                <Text style={[styles.settingSubtitle, { color: theme.textMuted }]}>
+                  Point this device at your API server
+                </Text>
+              </View>
+            </View>
+            <TextInput
+              value={apiBaseUrl}
+              onChangeText={setApiBaseUrlState}
+              placeholder="http://192.168.1.10:3000/api/v1"
+              placeholderTextColor={theme.textMuted}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              style={[styles.urlInput, { borderColor: theme.border, backgroundColor: theme.background, color: theme.text }]}
+            />
+            <TouchableOpacity
+              style={[styles.secondaryBtn, { borderColor: theme.border }]}
+              onPress={handleSaveServerUrl}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.secondaryBtnText, { color: theme.text }]}>Save URL</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={[styles.settingCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+            <View style={styles.settingCardHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.settingLabel, { color: theme.text }]}>Manual Sync</Text>
+                <Text style={[styles.settingSubtitle, { color: theme.textMuted }]}>
+                  Pull the latest data from the server
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={[styles.saveBtn, { backgroundColor: COLORS.primary, opacity: isSyncing ? 0.7 : 1 }]}
+                onPress={handleSyncNow}
+                disabled={isSyncing}
+                activeOpacity={0.8}
+              >
+                {isSyncing ? (
+                  <ActivityIndicator color="#FFF" size="small" />
+                ) : (
+                  <Text style={styles.saveBtnText}>Sync Now</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+            <Text style={[styles.settingSubtitle, { color: theme.textMuted }]}>
+              Last synced: {lastSyncedAt ? new Date(lastSyncedAt).toLocaleString() : 'Never'}
+            </Text>
+          </View>
+        </Section>
+
+        {/* ── Sync & Account ─────────────────────────────────────────── */}
+        <Section title="Sync & Account" icon="☁️">
+          <View style={[styles.settingCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+            <View style={styles.settingCardHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.settingLabel, { color: theme.text }]}>Sync Account</Text>
+                <Text style={[styles.settingSubtitle, { color: theme.textMuted }]}>
+                  Use the same Supabase account on web and mobile
+                </Text>
+              </View>
+              {syncAccountEmail ? (
+                <TouchableOpacity
+                  style={[styles.secondaryBtn, { borderColor: theme.border }]}
+                  onPress={handleDisconnectSync}
+                  disabled={isAuthBusy}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.secondaryBtnText, { color: theme.text }]}>Disconnect</Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.saveBtn, { backgroundColor: COLORS.primary }]}
+                  onPress={() => setShowSyncForm((prev) => !prev)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.saveBtnText}>Enable Sync</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            <Text style={[styles.settingSubtitle, { color: theme.textMuted }]}>
+              {syncAccountEmail ? `Connected as ${syncAccountEmail}` : 'Create or sign in with an email account.'}
+            </Text>
+
+            {showSyncForm && !syncAccountEmail && (
+              <View style={styles.syncForm}>
+                <Text style={[styles.settingSubtitle, { color: theme.textMuted }]}>
+                  Sign up once, then use the same email on another device to sync everything.
+                </Text>
+                <TextInput
+                  value={syncEmail}
+                  onChangeText={setSyncEmail}
+                  placeholder="Email address"
+                  placeholderTextColor={theme.textMuted}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="email-address"
+                  style={[styles.syncInput, { borderColor: theme.border, backgroundColor: theme.background, color: theme.text }]}
+                />
+                <TextInput
+                  value={syncPassword}
+                  onChangeText={setSyncPassword}
+                  placeholder="Password"
+                  placeholderTextColor={theme.textMuted}
+                  secureTextEntry
+                  style={[styles.syncInput, { borderColor: theme.border, backgroundColor: theme.background, color: theme.text }]}
+                />
+                <View style={styles.syncButtonsRow}>
+                  <TouchableOpacity
+                    style={[styles.secondaryBtn, { borderColor: theme.border, flex: 1 }]}
+                    onPress={handleSignIn}
+                    disabled={isAuthBusy}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.secondaryBtnText, { color: theme.text }]}>
+                      {isAuthBusy ? 'Working…' : 'Sign In'}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.saveBtn, { backgroundColor: COLORS.primary, flex: 1 }]}
+                    onPress={handleCreateAccount}
+                    disabled={isAuthBusy}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.saveBtnText}>
+                      {isAuthBusy ? 'Working…' : 'Create Account'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+          </View>
+        </Section>
+
         {/* ── Categories ──────────────────────────────────────────────── */}
         <Section title="Categories" icon="🏷️">
           <CategoryManager categories={categories} />
@@ -413,6 +638,32 @@ const styles = StyleSheet.create({
   settingInfo: { gap: 3 },
   settingLabel: { fontSize: 15, fontWeight: '600' },
   settingSubtitle: { fontSize: 12, marginTop: 1 },
+  urlInput: {
+    borderWidth: 1.5,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 14,
+  },
+  secondaryBtn: {
+    borderWidth: 1.5,
+    borderRadius: 12,
+    paddingVertical: 11,
+    alignItems: 'center',
+  },
+  secondaryBtnText: { fontSize: 14, fontWeight: '700' },
+  syncForm: { gap: 10, marginTop: 8 },
+  syncInput: {
+    borderWidth: 1.5,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+  },
+  syncButtonsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
   toggleRow: {
     flexDirection: 'row',
     gap: 8,

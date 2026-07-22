@@ -39,13 +39,23 @@ export default function TaskCard({ task, categories, onEdit, compact = false }: 
   const statusMut = useMutation({
     mutationFn: ({ status }: { status: TaskStatus }) =>
       updateTaskOccurrence(task.id, { status }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['task-occurrences'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['task-occurrences'] });
+      qc.invalidateQueries({ queryKey: ['dashboard-streaks'] });
+      qc.invalidateQueries({ queryKey: ['time-spent'] });
+      qc.invalidateQueries({ queryKey: ['completion-rate'] });
+    },
   });
 
   const deleteMut = useMutation({
     mutationFn: ({ scope, dateRange }: { scope?: DeleteScope; dateRange?: { start: string; end: string } }) =>
       deleteTaskOccurrence(task.id, scope, dateRange),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['task-occurrences'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['task-occurrences'] });
+      qc.invalidateQueries({ queryKey: ['dashboard-streaks'] });
+      qc.invalidateQueries({ queryKey: ['time-spent'] });
+      qc.invalidateQueries({ queryKey: ['completion-rate'] });
+    },
   });
 
   const handlePlay = useCallback(async () => {

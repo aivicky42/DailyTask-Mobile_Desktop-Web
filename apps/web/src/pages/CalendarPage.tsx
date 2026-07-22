@@ -1,17 +1,16 @@
-import { useState, useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useState, useEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  formatDateISO, formatDate, formatTime12, minutesToHM, parseISO,
+  formatDateISO, formatDate,
   startOfMonth, endOfMonth,
 } from '../lib/utils';
-import { cn } from '../lib/utils';
-import { addDays } from '../lib/utils';
-import { getTaskOccurrences, getCategories } from '../api/client';
+import { parseISO } from '../lib/utils';
+import { getTaskOccurrences, getCategories, generateForRange } from '../api/client';
 import CalendarGrid from '../components/CalendarGrid';
 import TaskCard from '../components/TaskCard';
 import TaskModal from '../components/TaskModal';
 import type { TaskOccurrence } from '../types';
-import { CalendarDays, ListTodo } from 'lucide-react';
+import { CalendarDays, ListTodo, Plus } from 'lucide-react';
 
 function addMonths(date: Date, n: number) {
   const d = new Date(date);
@@ -20,25 +19,43 @@ function addMonths(date: Date, n: number) {
 }
 
 export default function CalendarPage() {
+  const qc = useQueryClient();
   const [currentMonth, setCurrentMonth] = useState(() => new Date());
   const [selectedDate, setSelectedDate] = useState(() => formatDateISO(new Date()));
   const [editingTask, setEditingTask] = useState<TaskOccurrence | null>(null);
+  const [showAddTask, setShowAddTask] = useState(false);
 
   const monthStart = startOfMonth(currentMonth);
   const monthEnd = endOfMonth(currentMonth);
+  const monthStartStr = formatDateISO(monthStart);
+  const monthEndStr = formatDateISO(monthEnd);
 
-  // Fetch all tasks for the visible month range
+  // Materialize recurring templates across the visible month before fetching.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        await generateForRange(monthStartStr, monthEndStr);
+        if (!cancelled) {
+          await qc.invalidateQueries({ queryKey: ['task-occurrences'] });
+        }
+      } catch {
+        /* non-critical – calendar still shows existing occurrences */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [monthStartStr, monthEndStr, qc]);
+
   const { data: monthTasks = [], isLoading: monthLoading } = useQuery({
-    queryKey: ['task-occurrences', { start_date: formatDateISO(monthStart), end_date: formatDateISO(monthEnd) }],
+    queryKey: ['task-occurrences', { start_date: monthStartStr, end_date: monthEndStr }],
     queryFn: () =>
       getTaskOccurrences({
-        start_date: formatDateISO(monthStart),
-        end_date: formatDateISO(monthEnd),
+        start_date: monthStartStr,
+        end_date: monthEndStr,
       }),
-    staleTime: 30_000,
+    staleTime: 15_000,
   });
 
-  // Fetch tasks for selected date
   const { data: dayTasks = [], isLoading: dayLoading } = useQuery({
     queryKey: ['task-occurrences', { date: selectedDate }],
     queryFn: () => getTaskOccurrences({ date: selectedDate }),
@@ -58,15 +75,12 @@ export default function CalendarPage() {
     setSelectedDate(date);
   };
 
-  // Stats for selected day
   const completedToday = dayTasks.filter((t) => t.status === 'COMPLETED').length;
   const totalToday = dayTasks.length;
-
   const isSelectedToday = selectedDate === formatDateISO(new Date());
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div>
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Calendar</h1>
         <p className="text-sm text-gray-400 dark:text-gray-500 mt-0.5">
@@ -74,7 +88,6 @@ export default function CalendarPage() {
         </p>
       </div>
 
-      {/* Calendar */}
       {monthLoading ? (
         <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 h-80 animate-pulse" />
       ) : (
@@ -89,7 +102,6 @@ export default function CalendarPage() {
         />
       )}
 
-      {/* Selected day tasks */}
       <div>
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
@@ -103,6 +115,14 @@ export default function CalendarPage() {
               </span>
             )}
           </div>
+          <button
+            type="button"
+            onClick={() => setShowAddTask(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-primary text-white hover:bg-primary-600"
+          >
+            <Plus size={14} />
+            Add task
+          </button>
         </div>
 
         {dayLoading ? (
@@ -117,9 +137,13 @@ export default function CalendarPage() {
             <p className="text-sm font-medium text-gray-500 dark:text-gray-400">
               No tasks on this day
             </p>
-            <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-              Click the + button to add one
-            </p>
+            <button
+              type="button"
+              onClick={() => setShowAddTask(true)}
+              className="mt-3 text-xs font-medium text-primary hover:underline"
+            >
+              Add a task for this date
+            </button>
           </div>
         ) : (
           <div className="space-y-3">
@@ -135,13 +159,20 @@ export default function CalendarPage() {
         )}
       </div>
 
-      {/* Edit task modal */}
       {editingTask && (
         <TaskModal
           task={editingTask}
           initialDate={selectedDate}
           onClose={() => setEditingTask(null)}
           onSuccess={() => setEditingTask(null)}
+        />
+      )}
+
+      {showAddTask && (
+        <TaskModal
+          initialDate={selectedDate}
+          onClose={() => setShowAddTask(false)}
+          onSuccess={() => setShowAddTask(false)}
         />
       )}
     </div>

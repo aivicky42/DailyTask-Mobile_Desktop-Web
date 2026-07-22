@@ -154,6 +154,9 @@ export default function CategoryManager() {
       qc.invalidateQueries({ queryKey: ['categories'] });
       setShowAdd(false);
     },
+    onError: (error: Error) => {
+      alert(error?.message ?? 'Failed to create category.');
+    },
   });
 
   const updateMut = useMutation({
@@ -163,11 +166,17 @@ export default function CategoryManager() {
       qc.invalidateQueries({ queryKey: ['categories'] });
       setEditingId(null);
     },
+    onError: (error: Error) => {
+      alert(error?.message ?? 'Failed to update category.');
+    },
   });
 
   const deleteMut = useMutation({
     mutationFn: deleteCategory,
     onSuccess: () => qc.invalidateQueries({ queryKey: ['categories'] }),
+    onError: (error: Error) => {
+      alert(error?.message ?? 'Failed to delete category.');
+    },
   });
 
   if (isLoading) {

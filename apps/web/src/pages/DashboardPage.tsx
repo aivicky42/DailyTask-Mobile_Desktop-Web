@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { format, subDays, formatDateISO, parseISO } from '../lib/utils';
 import { formatDate, minutesToHM, formatElapsed } from '../lib/utils';
 import {
@@ -91,14 +91,29 @@ function ActiveTimerBanner({ tasks, categories }: { tasks: TaskOccurrence[]; cat
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
+  const qc = useQueryClient();
   const today = formatDateISO(new Date());
   const sevenDaysAgo = formatDateISO(subDays(new Date(), 6));
   const [editingTask, setEditingTask] = useState<TaskOccurrence | null>(null);
 
-  // Generate today's occurrences from templates on mount
+  // Generate today's occurrences from templates on mount, then refresh lists
   useEffect(() => {
-    generateToday().catch(() => { /* silent – non-critical */ });
-  }, []);
+    let cancelled = false;
+    (async () => {
+      try {
+        await generateToday();
+        if (!cancelled) {
+          await qc.invalidateQueries({ queryKey: ['task-occurrences'] });
+          await qc.invalidateQueries({ queryKey: ['dashboard-streaks'] });
+          await qc.invalidateQueries({ queryKey: ['time-spent'] });
+          await qc.invalidateQueries({ queryKey: ['completion-rate'] });
+        }
+      } catch {
+        /* silent – non-critical */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [qc]);
 
   const { data: streaks, isLoading: streaksLoading } = useQuery({
     queryKey: ['dashboard-streaks'],

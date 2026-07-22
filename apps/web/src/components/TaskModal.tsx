@@ -11,6 +11,7 @@ import {
   updateTaskTemplate,
   checkConflict,
   generateToday,
+  generateForRange,
 } from '../api/client';
 import ConflictDialog from './ConflictDialog';
 import RecurrencePrompt from './RecurrencePrompt';
@@ -127,6 +128,9 @@ export default function TaskModal({ task, initialDate, onClose, onSuccess }: Tas
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ['task-occurrences'] });
     qc.invalidateQueries({ queryKey: ['task-templates'] });
+    qc.invalidateQueries({ queryKey: ['dashboard-streaks'] });
+    qc.invalidateQueries({ queryKey: ['time-spent'] });
+    qc.invalidateQueries({ queryKey: ['completion-rate'] });
   };
 
   const createOccurrenceMut = useMutation({
@@ -142,9 +146,14 @@ export default function TaskModal({ task, initialDate, onClose, onSuccess }: Tas
 
   const createTemplateMut = useMutation({
     mutationFn: createTaskTemplate,
-    onSuccess: async () => {
-      // Immediately generate today's occurrence so the task appears right away
-      try { await generateToday(); } catch { /* non-critical */ }
+    onSuccess: async (template) => {
+      const start = template.start_date || form.date;
+      const end = template.due_date || form.due_date || start;
+      try {
+        await generateForRange(start, end);
+      } catch {
+        try { await generateToday(); } catch { /* non-critical */ }
+      }
       invalidate();
       onSuccess();
     },
@@ -202,9 +211,9 @@ export default function TaskModal({ task, initialDate, onClose, onSuccess }: Tas
     reminder_enabled: form.reminder_enabled,
     recurrence_type: form.recurrence_type,
     recurrence_interval: form.recurrence_type === 'RECURRING' ? form.recurrence_interval : null,
-    // Scheduler expects comma-separated string: 'Mon,Wed,Fri'
+    // Scheduler expects comma-separated abbreviated days: 'Mon,Wed,Fri'
     custom_days: form.recurrence_type === 'CUSTOM' && form.custom_days.length > 0
-      ? form.custom_days.join(',')
+      ? form.custom_days.map((d) => DAY_NAMES[d]).join(',')
       : null,
   });
 

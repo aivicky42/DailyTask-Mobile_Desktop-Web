@@ -38,6 +38,19 @@ npm install
 cd apps/mobile && npm install && cd ../..
 ```
 
+### 1b. Set Up Supabase
+
+Create a Supabase project, run [`supabase/schema.sql`](supabase/schema.sql) in the SQL editor, then set these environment variables:
+
+- [`apps/web/.env.example`](apps/web/.env.example)
+- [`apps/mobile/.env.example`](apps/mobile/.env.example)
+
+The current codebase still has the existing API server, but these files prepare the repo for a Supabase-backed cloud database and shared sync layer.
+
+Note: the Supabase policies use `auth.uid()`, so users must sign in through Supabase Auth before the cloud tables can be read or written.
+
+In the app Settings screens, the new `Enable Sync` flow lets a user create or sign in to a Supabase account on one device, then use the same email and password on another device to access the same synced cloud account.
+
 ---
 
 ### 2. Start the Backend API
@@ -144,6 +157,7 @@ npm start
 - Recurrence-aware edit/delete scope selector
 - Local notification scheduling with Snooze (5/10/30 min) support
 - Pull-to-refresh on all screens
+- Settings includes a per-device backend URL and a manual Sync Now action for refreshing data from the API
 
 **Tech**: Expo 51, React Navigation v6, expo-sqlite, expo-notifications, react-native-gifted-charts, Zustand + AsyncStorage
 
@@ -200,4 +214,5 @@ NODE_ENV=development
 
 - The API uses SQLite for development. Swap `better-sqlite3` for a PostgreSQL driver (e.g., `pg`) and update `db/database.ts` for production cloud deployment.
 - The `sync_version` field on every row enables the delta sync protocol: clients send their `last_sync_timestamp` and receive only rows updated since then.
+- Mobile and web both expose a Settings > Sync & Server panel so each device can point at the same API host and manually refresh server state.
 - JWT authentication is stubbed (v1 single-user mode). All `owner_id` values are `null`. Add real auth by populating `owner_id` from JWT claims in `middleware/auth.ts`.

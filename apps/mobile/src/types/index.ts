@@ -92,6 +92,14 @@ export interface ActiveTimer {
   is_active: boolean;
 }
 
+export interface TimerSession {
+  id: string;
+  task_occurrence_id: string;
+  start_time: string;
+  end_time: string | null;
+  is_active: boolean;
+}
+
 export interface TimeSpentEntry {
   date: string;
   total_seconds: number;
