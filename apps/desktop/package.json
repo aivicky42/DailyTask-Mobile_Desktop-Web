@@ -1,0 +1,59 @@
+{
+  "name": "@dailytask/desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DailyTask desktop shell (Electron) — separate from apps/web",
+  "main": "main.cjs",
+  "scripts": {
+    "dev": "electron .",
+    "start": "electron .",
+    "preview": "npm run build:web && cross-env ELECTRON_PROD=1 electron .",
+    "build:web": "npm run build --workspace=@dailytask/web",
+    "dist": "npm run build:web && electron-builder --publish never",
+    "dist:dir": "npm run build:web && electron-builder --dir --publish never"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "electron": "^36.4.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.dailytask.desktop",
+    "productName": "DailyTask",
+    "copyright": "Copyright © DailyTask",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../web/dist",
+        "to": "web-dist"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.productivity"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Office"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
