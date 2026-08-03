@@ -1,21 +1,34 @@
 # DailyTask
 
-> Track, manage, and alert users about their schedules, deadlines, and active tasks — with unified time-tracking, offline-first resilience, and automated conflict resolution.
+> Track, manage, and alert users about their schedules, deadlines, and active tasks — with unified time-tracking, offline-first resilience, and optional cloud sync.
 
 ---
 
 ## Project Structure
 
 ```
-DailyTask_codex/
+DailyTask/
 ├── apps/
-│   ├── api/        → Node.js + Express + TypeScript REST API (SQLite)
+│   ├── api/        → Node.js + Express + TypeScript REST API (optional / legacy)
 │   ├── web/        → React + Vite + TypeScript Web App
+│   ├── desktop/    → Electron desktop shell (wraps the web app)
 │   └── mobile/     → Expo React Native Mobile App (iOS + Android)
 ├── packages/
 │   └── shared/     → Shared TypeScript types and constants
+├── supabase/       → Cloud schema for optional Sync
 └── package.json    → Monorepo workspace root
 ```
+
+---
+
+## Data modes
+
+| Mode | When | Where data lives |
+|------|------|------------------|
+| **Local (default)** | One device only | Phone / browser / desktop local storage |
+| **Sync (optional)** | Web + mobile (or multiple devices) | Supabase cloud — Enable Sync & sign in |
+
+You do **not** need `npm run api` for normal local or Supabase sync use.
 
 ---
 
@@ -24,195 +37,207 @@ DailyTask_codex/
 ### Prerequisites
 - Node.js 20+
 - npm 10+
-- Expo CLI (`npm install -g expo-cli`) — for mobile development
-
----
+- For mobile: Expo Go (same Wi‑Fi as your PC), or an emulator
+- For desktop builds: dependencies from `npm install` (includes Electron)
 
 ### 1. Install Dependencies
 
 ```bash
-# Install root + API + Web dependencies
 npm install
 
-# Install mobile dependencies separately (Expo workflow)
+# Mobile may still need its own install in some setups
 cd apps/mobile && npm install && cd ../..
 ```
 
-### 1b. Set Up Supabase
+### 2. Environment (Supabase — optional, required for Sync)
 
-Create a Supabase project, run [`supabase/schema.sql`](supabase/schema.sql) in the SQL editor, then set these environment variables:
-
-- [`apps/web/.env.example`](apps/web/.env.example)
-- [`apps/mobile/.env.example`](apps/mobile/.env.example)
-
-The current codebase still has the existing API server, but these files prepare the repo for a Supabase-backed cloud database and shared sync layer.
-
-Note: the Supabase policies use `auth.uid()`, so users must sign in through Supabase Auth before the cloud tables can be read or written.
-
-In the app Settings screens, the new `Enable Sync` flow lets a user create or sign in to a Supabase account on one device, then use the same email and password on another device to access the same synced cloud account.
-
----
-
-### 2. Start the Backend API
+Copy examples to real env files (gitignored) and fill in your project values:
 
 ```bash
-npm run api
-# → Server runs at http://localhost:3000
-# → SQLite database auto-created at apps/api/dailytask.db
+# Web / Desktop (web build)
+cp apps/web/.env.example apps/web/.env
+
+# Mobile
+cp apps/mobile/.env.example apps/mobile/.env
 ```
 
-The API will:
-- Auto-generate the database schema on first run
-- Seed the 6 system categories (Work, Personal, Study, Health, Life, Others)
-- Create default settings and streaks records
-- Schedule the midnight task-rollover job (node-cron)
+| App | Variables |
+|-----|-----------|
+| Web / Desktop | `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` |
+| Mobile | `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY` |
 
----
+Apply [`supabase/schema.sql`](supabase/schema.sql) in the Supabase SQL editor once.
+
+`.env.example` files use **placeholders only**. Real keys stay in local `.env` or host secrets (Vercel / EAS).
+
+In Settings → **Enable Sync**, create or sign in with the same email on each device to share cloud data.
 
 ### 3. Start the Web App
 
 ```bash
 npm run web
-# → Dev server at http://localhost:5173
+# → http://localhost:5173
 ```
 
----
+### 4. Start the Desktop App (Electron)
 
-### 4. Start the Mobile App
+Desktop is a **separate** package (`apps/desktop`). It does not change `apps/web` source; it loads the web UI in an Electron window.
 
 ```bash
-# From the project root
-cd apps/mobile
-npm start
-# → Expo dev server
-# → Scan QR code with Expo Go app on your device
-# → Press 'a' for Android emulator, 'i' for iOS simulator
+# Dev: starts Vite + Electron together
+npm run desktop:dev
+
+# Or two terminals:
+npm run web
+npm run desktop
+
+# Preview packaged-style (builds web, then opens Electron offline-style)
+npm run desktop:preview
+
+# Build installers (.exe / .dmg / AppImage)
+npm run desktop:dist
+# → output in apps/desktop/release/
 ```
 
-**Important**: Update the API base URL in `apps/mobile/src/api/client.ts` to match your machine's local IP address (e.g., `http://192.168.1.100:3000/api/v1`) when testing on a physical device.
+| Script | Purpose |
+|--------|---------|
+| `npm run desktop:dev` | Development (hot reload via Vite) |
+| `npm run desktop` | Electron only (expects web on `:5173`) |
+| `npm run desktop:preview` | Build web + run Electron against `dist` |
+| `npm run desktop:dist` | Produce desktop installers |
+
+Credentials for desktop come from the **web** build (`apps/web/.env` or CI env vars) when you build/pack.
+
+### 5. Start the Mobile App
+
+```bash
+npm run mobile
+# or: cd apps/mobile && npm start
+```
+
+- Scan the QR with **Expo Go** (same Wi‑Fi), or press `a` / `i` for emulator  
+- Local mode works **without** the API server  
+- For Sync, set mobile `.env` and use Settings → Enable Sync  
+
+### 6. Backend API (optional)
+
+```bash
+npm run api
+# → http://localhost:3000
+```
+
+Kept for legacy/API development. Day-to-day web, desktop, and mobile use **local storage** or **Supabase**, not this server.
 
 ---
 
 ## Apps Overview
 
-### Backend API (`apps/api`)
+### Web App (`apps/web`)
 
-| Route | Description |
-|-------|-------------|
-| `GET /api/v1/health` | Server + DB health check |
-| `GET/POST /api/v1/categories` | List + create categories |
-| `PATCH/DELETE /api/v1/categories/:id` | Update / soft-delete categories |
-| `GET/POST /api/v1/task-templates` | List + create recurring templates |
-| `PUT /api/v1/task-templates/:id` | Update template |
-| `POST /api/v1/task-templates/generate-today` | Manually trigger day rollover |
-| `GET/POST /api/v1/task-occurrences` | List (with filters) + create occurrences |
-| `PUT /api/v1/task-occurrences/:id` | Update occurrence (supports `decouple`) |
-| `DELETE /api/v1/task-occurrences/:id` | Delete with scope (`SINGLE`/`RANGE`/`ALL_RECURRING`) |
-| `POST /api/v1/task-occurrences/check-conflict` | Pre-save conflict checker |
-| `POST /api/v1/timer-sessions/play` | Start timer (auto-pauses any running session) |
-| `POST /api/v1/timer-sessions/pause` | Pause active timer |
-| `GET /api/v1/timer-sessions/active` | Restore timer on app startup |
-| `GET/PUT /api/v1/settings` | App preferences |
-| `GET /api/v1/dashboard/streaks` | Streak statistics |
-| `GET /api/v1/dashboard/analytics/time-spent` | Weekly time graph data |
-| `GET /api/v1/dashboard/analytics/completion-rate` | Weekly completion rate data |
-| `POST /api/v1/sync` | Delta sync protocol |
+**Pages:** Dashboard, Tasks, Calendar, Settings  
 
-**Tech**: Express 4, TypeScript 5, better-sqlite3, node-cron
+**Features:** dark/light/system theme, conflict detection, recurrence-aware edit/delete, timers, charts, local-first data, optional Supabase Sync  
+
+**Tech:** React 18, Vite 5, Tailwind CSS 3, React Router v6, TanStack Query v5, Recharts, Zustand  
 
 ---
 
-### Web App (`apps/web`)
+### Desktop App (`apps/desktop`)
 
-**Pages:**
-- **Dashboard** — Streak counter 🔥, active timer banner, today's tasks, time-spent bar chart, completion-rate line chart
-- **Tasks** — Date navigation, search, category filter, 3 tabs (To Do / In Progress / Completed), task cards with timer controls
-- **Calendar** — Monthly grid with task dot indicators, click-to-see-day task list
-- **Settings** — Theme toggle, notification defaults, category management (add/edit/delete with color + emoji)
+Electron shell around the web app — same UI and local/sync behavior, as a native-feeling desktop window.
 
-**Features:**
-- Full dark/light/system theme
-- Schedule conflict detection with override option
-- Recurrence-aware edit/delete (Current Day / Day Range / All)
-- Real-time timer display with elapsed + remaining + progress ring
-- Optimistic UI updates via TanStack Query
+- **Dev:** loads `http://localhost:5173`  
+- **Preview / packaged:** serves the built `apps/web/dist` locally (usable offline after install)  
+- **Separate from web:** no Electron code inside `apps/web`  
 
-**Tech**: React 18, Vite 5, Tailwind CSS 3, React Router v6, TanStack Query v5, Recharts, Zustand, Lucide React
+**Tech:** Electron, electron-builder  
 
 ---
 
 ### Mobile App (`apps/mobile`)
 
-**Screens:**
-- **Dashboard** — Greeting, streak card, active timer banner, top-5 tasks, analytics charts, pull-to-refresh
-- **Tasks** — Date navigation, search bar, category filter chips, 3 tab panels, FAB to add task
-- **Calendar** — Monthly grid with task dots, selected-day task list
-- **Settings** — Theme selector, defaults, category manager with color picker + emoji/image picker
+**Screens:** Dashboard, Tasks, Calendar, Settings  
 
-**Features:**
-- Bottom tab navigation
-- Task creation/editing via bottom-sheet modal
-- Live timer with crash-resilient AsyncStorage persistence
-- Conflict detection modal with Override/Reschedule options
-- Recurrence-aware edit/delete scope selector
-- Local notification scheduling with Snooze (5/10/30 min) support
-- Pull-to-refresh on all screens
-- Settings includes a per-device backend URL and a manual Sync Now action for refreshing data from the API
+**Features:** bottom tabs, task modals, live timer, conflict/recurrence flows, notifications, local-first storage, optional Supabase Sync  
 
-**Tech**: Expo 51, React Navigation v6, expo-sqlite, expo-notifications, react-native-gifted-charts, Zustand + AsyncStorage
+**Tech:** Expo, React Navigation v6, TanStack Query, Zustand + AsyncStorage, Supabase JS  
+
+---
+
+### Backend API (`apps/api`) — optional
+
+Express + SQLite API used historically for shared server mode. Not required for local-only or Supabase Sync workflows.
+
+**Tech:** Express 4, TypeScript 5, better-sqlite3, node-cron  
 
 ---
 
 ## Architecture Principles
 
 ### 1. Separation of Template & Occurrence
-Tasks are stored as `task_templates` (master definition with recurrence rules) and instantiated as `task_occurrences` (daily instances). Editing "current day only" sets `is_detached = true` on the occurrence, decoupling it from the template without breaking the recurring chain.
+Tasks are stored as `task_templates` (recurrence rules) and `task_occurrences` (daily instances). Editing “current day only” can detach an occurrence from its template.
 
 ### 2. Single Active Focus Constraint
-Only one timer session may run at any time. Calling `POST /timer-sessions/play` automatically pauses any currently active session and accumulates its elapsed time before starting the new one.
+Only one timer may run at a time; starting a new timer pauses the previous one and accumulates elapsed time.
 
 ### 3. Schedule Conflict Prevention
-Before any task is saved, the system calculates its time block (`start_time` → `start_time + time_to_complete`) and checks for overlaps with existing tasks on the same date. Conflicts surface an interactive dialog giving the user the option to Override or Reschedule.
+Before save, the app checks overlapping time blocks on the same date and offers Override or Reschedule.
 
-### 4. Offline-First & Crash-Resilience
-- Timer state is written to persistent storage (SQLite / AsyncStorage) continuously.
-- On app launch, `GET /timer-sessions/active` restores any running session, recalculating elapsed time from `now - session_start_time + saved_elapsed`.
-- Midnight scheduler (`node-cron` at `0 0 * * *`) generates the new day's tasks automatically.
+### 4. Local-first & optional Sync
+- Default: data stays on the device (web/desktop browser storage, mobile local store).  
+- Sync: same Supabase account across devices.  
+- Timer/session state is persisted so a crash/restart can restore an active timer.
 
 ---
 
-## Database Schema
+## Database Schema (cloud / API)
 
 ```
-categories          → Task groupings (6 system + custom)
+categories          → Task groupings (system + custom)
 task_templates      → Master recurring task definitions
-task_occurrences    → Daily task instances (denormalized from template)
-timer_sessions      → Per-session tracking logs (one active at a time)
+task_occurrences    → Daily task instances
+timer_sessions      → Per-session tracking logs
 reminders           → Scheduled notification alarms
-settings            → User preferences (one row)
-streaks             → Gamification data (one row)
+settings            → User preferences
+streaks             → Gamification data
 ```
 
-All tables include soft-delete (`deleted_at`), optimistic sync (`sync_version`), and `owner_id` for future multi-user support.
+Soft-delete (`deleted_at`), `sync_version`, and `owner_id` support sync and multi-device ownership under Supabase RLS.
 
 ---
 
 ## Environment Variables
 
-Copy `apps/api/.env.example` to `apps/api/.env`:
+### Web / Desktop
+
+`apps/web/.env` (from `.env.example`):
 
 ```env
-PORT=3000
-DB_PATH=./dailytask.db
-CORS_ORIGIN=http://localhost:5173
-NODE_ENV=development
+VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
 ```
+
+### Mobile
+
+`apps/mobile/.env` (from `.env.example`):
+
+```env
+EXPO_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT.supabase.co
+EXPO_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+```
+
+### Deploy hosts
+- **Vercel (web):** set the `VITE_*` variables in the project env UI  
+- **EAS (mobile):** set the `EXPO_PUBLIC_*` variables as EAS secrets / env  
+- **Desktop pack:** ensure web env is present when running `desktop:dist`  
+
+Never commit real `.env` files. Keep secrets in local `.env` or host dashboards only.
 
 ---
 
 ## Development Notes
 
-- The API uses SQLite for development. Swap `better-sqlite3` for a PostgreSQL driver (e.g., `pg`) and update `db/database.ts` for production cloud deployment.
-- The `sync_version` field on every row enables the delta sync protocol: clients send their `last_sync_timestamp` and receive only rows updated since then.
-- Mobile and web both expose a Settings > Sync & Server panel so each device can point at the same API host and manually refresh server state.
-- JWT authentication is stubbed (v1 single-user mode). All `owner_id` values are `null`. Add real auth by populating `owner_id` from JWT claims in `middleware/auth.ts`.
+- Local-only use needs no API and no Sync.  
+- Sync requires Supabase schema + env vars + Enable Sync sign-in.  
+- Desktop and web share one UI codebase; ship desktop via Electron when you want an offline-friendly PC installer.  
+- Mobile production builds use EAS (`eas build`), not Expo Go.
