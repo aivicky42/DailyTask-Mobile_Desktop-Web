@@ -14,7 +14,7 @@ import type {
   DeleteScope,
   TaskStatus,
 } from '../types';
-import type { GetOccurrencesParams } from '../api/client';
+import type { GetOccurrencesParams } from './localData';
 
 async function requireUserId(): Promise<string> {
   if (!supabase) throw new Error('Supabase is not configured.');
@@ -23,6 +23,10 @@ async function requireUserId(): Promise<string> {
   return data.user.id;
 }
 
+/**
+ * Cloud only when the user opts into Sync and is signed in.
+ * Otherwise the app uses on-device local storage (no PC API needed).
+ */
 export async function isCloudMode(): Promise<boolean> {
   if (!supabase || !(await getSyncEnabled())) return false;
   const { data } = await supabase.auth.getUser();

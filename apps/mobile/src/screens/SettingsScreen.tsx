@@ -435,7 +435,7 @@ export default function SettingsScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={[styles.settingLabel, { color: theme.text }]}>Sync Account</Text>
                 <Text style={[styles.settingSubtitle, { color: theme.textMuted }]}>
-                  Use the same Supabase account on web and mobile
+                  Optional: only needed to share data between phone and web. Single-device use stays local.
                 </Text>
               </View>
               {syncAccountEmail ? (

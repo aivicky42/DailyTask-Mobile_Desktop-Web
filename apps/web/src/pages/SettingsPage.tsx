@@ -358,7 +358,7 @@ export default function SettingsPage() {
 
       {/* ── Sync & Server ─────────────────────────────────────────────── */}
       <Section title="Sync & Server" icon={<RefreshCw size={16} />}>
-        <Row label="Sync Account" description="Create or use the same Supabase account on any device">
+        <Row label="Sync Account" description="Optional — only for sharing between phone and web. Single-device use stays local in this browser.">
           {syncAccountEmail ? (
             <div className="flex items-center gap-2">
               <span className="text-sm text-gray-600 dark:text-gray-300">{syncAccountEmail}</span>

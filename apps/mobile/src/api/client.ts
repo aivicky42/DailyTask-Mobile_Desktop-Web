@@ -13,7 +13,7 @@ import {
   DeleteScope,
 } from '../types';
 import { loadNotificationsModule } from '../lib/notifications';
-import { getApiBaseUrl, getLastSyncAt, setLastSyncAt } from '../lib/appConfig';
+import { setLastSyncAt } from '../lib/appConfig';
 import {
   isCloudMode,
   cloudGetCategories,
@@ -41,53 +41,31 @@ import {
   cloudGetCompletionRate,
   cloudSyncNow,
 } from '../lib/cloudData';
-
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const baseUrl = await getApiBaseUrl();
-  const response = await fetch(`${baseUrl}${path}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      ...options.headers,
-    },
-    ...options,
-  });
-
-  if (!response.ok) {
-    let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-    try {
-      const body = await response.json();
-      if (body.message) errorMessage = body.message;
-      if (body.error) errorMessage = body.error;
-    } catch {
-      /* ignore */
-    }
-    throw new Error(errorMessage);
-  }
-
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
-}
-
-function get<T>(path: string): Promise<T> {
-  return request<T>(path, { method: 'GET' });
-}
-
-function post<T>(path: string, body?: unknown): Promise<T> {
-  return request<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined });
-}
-
-function put<T>(path: string, body?: unknown): Promise<T> {
-  return request<T>(path, { method: 'PUT', body: body ? JSON.stringify(body) : undefined });
-}
-
-function patch<T>(path: string, body?: unknown): Promise<T> {
-  return request<T>(path, { method: 'PATCH', body: body ? JSON.stringify(body) : undefined });
-}
-
-function del<T>(path: string, body?: unknown): Promise<T> {
-  return request<T>(path, { method: 'DELETE', body: body ? JSON.stringify(body) : undefined });
-}
+import {
+  localGetCategories,
+  localCreateCategory,
+  localUpdateCategory,
+  localDeleteCategory,
+  localGetTaskTemplates,
+  localCreateTaskTemplate,
+  localUpdateTaskTemplate,
+  localDeleteTaskTemplate,
+  localGenerateToday,
+  localGenerateForRange,
+  localGetTaskOccurrences,
+  localCreateTaskOccurrence,
+  localUpdateTaskOccurrence,
+  localDeleteTaskOccurrence,
+  localCheckConflict,
+  localPlayTimer,
+  localPauseTimer,
+  localGetActiveTimer,
+  localGetSettings,
+  localUpdateSettings,
+  localGetDashboardStreaks,
+  localGetTimeSpent,
+  localGetCompletionRate,
+} from '../lib/localData';
 
 async function useCloud(): Promise<boolean> {
   return isCloudMode();
@@ -108,27 +86,27 @@ interface SyncResponse {
 
 // Categories
 export function getCategories(): Promise<Category[]> {
-  return useCloud().then((cloud) => (cloud ? cloudGetCategories() : get<Category[]>('/categories')));
+  return useCloud().then((cloud) => (cloud ? cloudGetCategories() : localGetCategories()));
 }
 
 export function createCategory(data: { name: string; color_hex: string; icon_path: string }): Promise<Category> {
-  return useCloud().then((cloud) => (cloud ? cloudCreateCategory(data) : post<Category>('/categories', data)));
+  return useCloud().then((cloud) => (cloud ? cloudCreateCategory(data) : localCreateCategory(data)));
 }
 
 export function updateCategory(
   id: string,
   data: Partial<{ name: string; color_hex: string; icon_path: string }>,
 ): Promise<Category> {
-  return useCloud().then((cloud) => (cloud ? cloudUpdateCategory(id, data) : patch<Category>(`/categories/${id}`, data)));
+  return useCloud().then((cloud) => (cloud ? cloudUpdateCategory(id, data) : localUpdateCategory(id, data)));
 }
 
 export function deleteCategory(id: string): Promise<void> {
-  return useCloud().then((cloud) => (cloud ? cloudDeleteCategory(id) : del<void>(`/categories/${id}`)));
+  return useCloud().then((cloud) => (cloud ? cloudDeleteCategory(id) : localDeleteCategory(id)));
 }
 
 // Task templates
 export function getTaskTemplates(): Promise<TaskTemplate[]> {
-  return useCloud().then((cloud) => (cloud ? cloudGetTaskTemplates() : get<TaskTemplate[]>('/task-templates')));
+  return useCloud().then((cloud) => (cloud ? cloudGetTaskTemplates() : localGetTaskTemplates()));
 }
 
 export function createTaskTemplate(data: {
@@ -144,7 +122,7 @@ export function createTaskTemplate(data: {
   recurrence_interval?: RecurrenceInterval;
   custom_days?: string;
 }): Promise<TaskTemplate> {
-  return useCloud().then((cloud) => (cloud ? cloudCreateTaskTemplate(data as any) : post<TaskTemplate>('/task-templates', data)));
+  return useCloud().then((cloud) => (cloud ? cloudCreateTaskTemplate(data as any) : localCreateTaskTemplate(data)));
 }
 
 export function updateTaskTemplate(
@@ -163,54 +141,40 @@ export function updateTaskTemplate(
     custom_days: string;
   }>,
 ): Promise<TaskTemplate> {
-  return useCloud().then((cloud) => (cloud ? cloudUpdateTaskTemplate(id, data as any) : put<TaskTemplate>(`/task-templates/${id}`, data)));
+  return useCloud().then((cloud) => (cloud ? cloudUpdateTaskTemplate(id, data as any) : localUpdateTaskTemplate(id, data as any)));
 }
 
 export function deleteTaskTemplate(id: string): Promise<void> {
-  return useCloud().then((cloud) => (cloud ? cloudDeleteTaskTemplate(id) : del<void>(`/task-templates/${id}`)));
+  return useCloud().then((cloud) => (cloud ? cloudDeleteTaskTemplate(id) : localDeleteTaskTemplate(id)));
 }
 
 export function generateToday(): Promise<{ generated: number }> {
-  return useCloud().then((cloud) =>
-    cloud
-      ? cloudGenerateToday()
-      : post<{ generated: number }>('/task-templates/generate-today'),
-  );
+  return useCloud().then((cloud) => (cloud ? cloudGenerateToday() : localGenerateToday()));
 }
 
 export function generateForRange(start_date: string, end_date: string): Promise<{ generated?: number } | void> {
-  return useCloud().then((cloud) =>
-    cloud
-      ? cloudGenerateForRange(start_date, end_date)
-      : post('/task-templates/generate-range', { start_date, end_date }),
-  );
+  return useCloud().then((cloud) => (cloud ? cloudGenerateForRange(start_date, end_date) : localGenerateForRange(start_date, end_date)));
 }
 
-// Sync
+// Sync (cloud only — local mode has nothing remote to pull)
 export async function syncWithServer(): Promise<SyncResponse> {
-  if (await useCloud()) {
-    const { synced_at } = await cloudSyncNow();
-    return {
-      server_changes: {
-        categories: [],
-        task_templates: [],
-        task_occurrences: [],
-        timer_sessions: [],
-        reminders: [],
-        settings: [],
-        streaks: [],
-      },
-      synced_at,
-    };
+  if (!(await useCloud())) {
+    throw new Error('Enable Sync & sign in to sync across devices. Local-only mode stores data on this device.');
   }
-
-  const lastSyncedAt = await getLastSyncAt();
-  const response = await request<SyncResponse>('/sync', {
-    method: 'POST',
-    body: JSON.stringify({ last_synced_at: lastSyncedAt, changes: {} }),
-  });
-  await setLastSyncAt(response.synced_at);
-  return response;
+  const { synced_at } = await cloudSyncNow();
+  await setLastSyncAt(synced_at);
+  return {
+    server_changes: {
+      categories: [],
+      task_templates: [],
+      task_occurrences: [],
+      timer_sessions: [],
+      reminders: [],
+      settings: [],
+      streaks: [],
+    },
+    synced_at,
+  };
 }
 
 // Task occurrences
@@ -223,21 +187,7 @@ export interface GetOccurrencesParams {
 }
 
 export async function getTaskOccurrences(params?: GetOccurrencesParams): Promise<TaskOccurrence[]> {
-  if (await useCloud()) return cloudGetTaskOccurrences(params ?? {});
-
-  const searchParams = new URLSearchParams();
-  searchParams.set('page_size', '100');
-  if (params) {
-    Object.entries(params).forEach(([key, value]) => {
-      if (value !== undefined && value !== null && value !== '') {
-        searchParams.set(key, value);
-      }
-    });
-  }
-
-  const query = searchParams.toString();
-  const response = await get<TaskOccurrence[] | { data: TaskOccurrence[] }>(`/task-occurrences${query ? `?${query}` : ''}`);
-  return Array.isArray(response) ? response : response.data ?? [];
+  return useCloud().then((cloud) => (cloud ? cloudGetTaskOccurrences(params ?? {}) : localGetTaskOccurrences(params ?? {})));
 }
 
 export function createTaskOccurrence(data: {
@@ -253,7 +203,7 @@ export function createTaskOccurrence(data: {
   custom_days?: string;
   due_date?: string;
 }): Promise<TaskOccurrence> {
-  return useCloud().then((cloud) => (cloud ? cloudCreateTaskOccurrence(data as any) : post<TaskOccurrence>('/task-occurrences', data)));
+  return useCloud().then((cloud) => (cloud ? cloudCreateTaskOccurrence(data as any) : localCreateTaskOccurrence(data)));
 }
 
 export function updateTaskOccurrence(
@@ -270,27 +220,26 @@ export function updateTaskOccurrence(
     elapsed_time: number;
   }>,
 ): Promise<TaskOccurrence> {
-  return useCloud().then((cloud) => (cloud ? cloudUpdateTaskOccurrence(id, data as any) : patch<TaskOccurrence>(`/task-occurrences/${id}`, data)));
+  return useCloud().then((cloud) => (cloud ? cloudUpdateTaskOccurrence(id, data as any) : localUpdateTaskOccurrence(id, data as any)));
 }
 
 export function deleteTaskOccurrence(
   id: string,
   params?: { scope?: DeleteScope; end_date?: string },
 ): Promise<void> {
-  return useCloud().then((cloud) => {
-    if (cloud) {
-      return cloudDeleteTaskOccurrence(
-        id,
-        params?.scope,
-        params?.end_date ? { start: params.end_date, end: params.end_date } : undefined,
-      );
-    }
-    const search = new URLSearchParams();
-    if (params?.scope) search.set('scope', params.scope);
-    if (params?.end_date) search.set('end_date', params.end_date);
-    const qs = search.toString();
-    return request<void>(`/task-occurrences/${id}${qs ? `?${qs}` : ''}`, { method: 'DELETE' });
-  });
+  return useCloud().then((cloud) =>
+    cloud
+      ? cloudDeleteTaskOccurrence(
+          id,
+          params?.scope,
+          params?.end_date ? { start: params.end_date, end: params.end_date } : undefined,
+        )
+      : localDeleteTaskOccurrence(
+          id,
+          params?.scope,
+          params?.end_date ? { start: params.end_date, end: params.end_date } : undefined,
+        ),
+  );
 }
 
 export function checkConflict(data: {
@@ -299,70 +248,63 @@ export function checkConflict(data: {
   time_to_complete: number;
   exclude_id?: string;
 }): Promise<ConflictCheck> {
-  return useCloud().then((cloud) => (cloud ? cloudCheckConflict(data) : post<ConflictCheck>('/task-occurrences/conflict-check', data)));
+  return useCloud().then((cloud) => (cloud ? cloudCheckConflict(data) : localCheckConflict(data)));
 }
 
 // Timer
 export async function playTimer(task_occurrence_id: string): Promise<ActiveTimer> {
-  if (await useCloud()) {
-    const session = await cloudPlayTimer(task_occurrence_id);
-    return {
-      id: session.id,
-      task_occurrence_id: session.task_occurrence_id,
-      start_time: session.start_time,
-      is_active: session.is_active,
-    };
-  }
-  return post<ActiveTimer>('/timers/play', { task_occurrence_id });
+  const session = await useCloud().then((cloud) =>
+    cloud ? cloudPlayTimer(task_occurrence_id) : localPlayTimer(task_occurrence_id),
+  );
+  return {
+    id: session.id,
+    task_occurrence_id: session.task_occurrence_id,
+    start_time: session.start_time,
+    is_active: session.is_active,
+  };
 }
 
 export async function pauseTimer(): Promise<ActiveTimer> {
-  if (await useCloud()) {
-    const session = await cloudPauseTimer();
-    return {
-      id: session.id,
-      task_occurrence_id: session.task_occurrence_id,
-      start_time: session.start_time,
-      is_active: session.is_active,
-    };
-  }
-  return post<ActiveTimer>('/timers/pause');
+  const session = await useCloud().then((cloud) => (cloud ? cloudPauseTimer() : localPauseTimer()));
+  return {
+    id: session.id,
+    task_occurrence_id: session.task_occurrence_id,
+    start_time: session.start_time,
+    is_active: session.is_active,
+  };
 }
 
 export async function getActiveTimer(): Promise<ActiveTimer | null> {
-  if (await useCloud()) {
-    const result = await cloudGetActiveTimer();
-    if (!result) return null;
-    return {
-      id: result.session.id,
-      task_occurrence_id: result.session.task_occurrence_id,
-      start_time: result.session.start_time,
-      is_active: result.session.is_active,
-    };
-  }
-  return get<ActiveTimer | null>('/timers/active');
+  const result = await useCloud().then((cloud) => (cloud ? cloudGetActiveTimer() : localGetActiveTimer()));
+  if (!result) return null;
+  return {
+    id: result.session.id,
+    task_occurrence_id: result.session.task_occurrence_id,
+    start_time: result.session.start_time,
+    is_active: result.session.is_active,
+  };
 }
 
 // Settings
 export function getSettings(): Promise<Settings> {
-  return useCloud().then((cloud) => (cloud ? cloudGetSettings() : get<Settings>('/settings')));
+  return useCloud().then((cloud) => (cloud ? cloudGetSettings() : localGetSettings()));
 }
 
 export function updateSettings(data: Partial<Settings>): Promise<Settings> {
-  return useCloud().then((cloud) => (cloud ? cloudUpdateSettings(data) : patch<Settings>('/settings', data)));
+  return useCloud().then((cloud) => (cloud ? cloudUpdateSettings(data) : localUpdateSettings(data)));
 }
 
 // Dashboard
 export function getDashboardStreaks(): Promise<DashboardStreaks> {
-  return useCloud().then((cloud) => (cloud ? cloudGetDashboardStreaks() : get<DashboardStreaks>('/dashboard/streaks')));
+  return useCloud().then((cloud) => (cloud ? cloudGetDashboardStreaks() : localGetDashboardStreaks()));
 }
 
 export function getTimeSpent(start_date: string, end_date: string): Promise<TimeSpentEntry[]> {
-  return useCloud().then((cloud) => (cloud ? cloudGetTimeSpent(start_date, end_date) : get<TimeSpentEntry[]>(`/dashboard/time-spent?start_date=${start_date}&end_date=${end_date}`)));
+  return useCloud().then((cloud) => (cloud ? cloudGetTimeSpent(start_date, end_date) : localGetTimeSpent(start_date, end_date)));
 }
 
 export function getCompletionRate(start_date: string, end_date: string): Promise<CompletionRateEntry[]> {
-  return useCloud().then((cloud) => (cloud ? cloudGetCompletionRate(start_date, end_date) : get<CompletionRateEntry[]>(`/dashboard/completion-rate?start_date=${start_date}&end_date=${end_date}`)));
+  return useCloud().then((cloud) => (cloud ? cloudGetCompletionRate(start_date, end_date) : localGetCompletionRate(start_date, end_date)));
 }
 
 // Notifications

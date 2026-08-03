@@ -12,22 +12,18 @@ import { useTimerStore } from './src/store/timerStore';
 import { getActiveTimer } from './src/api/client';
 import { loadNotificationsModule } from './src/lib/notifications';
 
-// ─── Query Client ─────────────────────────────────────────────────────────────
-
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: 2,
-      staleTime: 1000 * 60 * 2,    // 2 minutes
-      gcTime: 1000 * 60 * 10,       // 10 minutes
+      staleTime: 1000 * 60 * 2,
+      gcTime: 1000 * 60 * 10,
     },
     mutations: {
       retry: 1,
     },
   },
 });
-
-// ─── Navigation Theme ─────────────────────────────────────────────────────────
 
 const NAV_LIGHT_THEME = {
   dark: false,
@@ -53,16 +49,11 @@ const NAV_DARK_THEME = {
   },
 };
 
-// ─── App Inner (needs hooks, so extracted from the root) ──────────────────────
-
 function AppInner() {
   const colorScheme = useColorScheme();
   const { startTimer } = useTimerStore();
 
   useEffect(() => {
-    let responseSub: { remove: () => void } | null = null;
-    let receivedSub: { remove: () => void } | null = null;
-
     (async () => {
       try {
         const Notifications = await loadNotificationsModule();
@@ -77,31 +68,9 @@ function AppInner() {
               shouldSetBadge: true,
             }),
           });
-
-          const { status } = await Notifications.requestPermissionsAsync();
-          if (status !== 'granted') {
-            console.warn('[Notifications] Permission not granted.');
-          }
-
-          responseSub = Notifications.addNotificationResponseReceivedListener((response) => {
-            const taskId = response.notification.request.content.data?.taskId as
-              | string
-              | undefined;
-            if (taskId) {
-              // In a full implementation, use a navigation ref here to deep-link to the task
-              console.log('[Notifications] Tapped notification for taskId:', taskId);
-            }
-          });
-
-          receivedSub = Notifications.addNotificationReceivedListener((notification) => {
-            console.log(
-              '[Notifications] Received in foreground:',
-              notification.request.content.title
-            );
-          });
         }
       } catch {
-        // Notifications are unavailable in Expo Go, so continue without them.
+        // Notifications unavailable in Expo Go
       }
 
       try {
@@ -115,15 +84,10 @@ function AppInner() {
           );
         }
       } catch {
-        // No active timer or network error — skip silently
+        // No active timer — skip
       }
     })();
-
-    return () => {
-      responseSub?.remove();
-      receivedSub?.remove();
-    };
-  }, []);
+  }, [startTimer]);
 
   const navTheme = colorScheme === 'dark' ? NAV_DARK_THEME : NAV_LIGHT_THEME;
 
@@ -134,8 +98,6 @@ function AppInner() {
     </NavigationContainer>
   );
 }
-
-// ─── Root ─────────────────────────────────────────────────────────────────────
 
 export default function App() {
   return (
